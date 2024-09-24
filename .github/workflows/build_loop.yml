@@ -276,6 +276,24 @@ jobs:
           # and make sure to specify the submodule by setting "--directory=(submodule_name)".
           # Several patches may be added per submodule.
           # Adding comments (#) may be useful to easily tell the individual patches apart.
+          echo "Downloading code to support 10 Minute Remote Passwords"
+          cd Loop
+          git remote add gestrich https://github.com/gestrich/Loop 
+          git fetch gestrich bugfix/2024-08-expired-command-8-2-24
+          git cherry-pick fetch_head;
+          cd ..
+          cd LoopKit
+          git remote add gestrich https://github.com/gestrich/LoopKit
+          git fetch gestrich bugfix/2024-08-expired-command-8-2-24
+          git cherry-pick fetch_head;
+          cd ..
+          cd NightscoutService
+          git remote add gestrich https://github.com/gestrich/NightscoutService
+          git fetch gestrich bugfix/2024-08-expired-command-8-2-24
+          git cherry-pick fetch_head;
+          cd ..
+          git add .; 
+          git commit -m "Added 10 minute remote password patches"
 
       # Patch Fastlane Match to not print tables
       - name: Patch Match Tables
