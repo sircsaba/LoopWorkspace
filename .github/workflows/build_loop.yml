@@ -302,6 +302,7 @@ jobs:
           /bin/bash -c "$(curl -fsSL \
           https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
           profiles \
+          negative_insulin \
           basal_lock
           
           # the final customization listed above CANNOT have a continuation character
