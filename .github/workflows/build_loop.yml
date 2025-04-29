@@ -310,7 +310,7 @@ jobs:
           https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
           profiles \
           basal_lock \
-          negative_insulin 
+          negative_insulin
           
           # the final customization listed above CANNOT have a continuation character
           # more customizations can be pasted after this line
