@@ -311,6 +311,7 @@ jobs:
           https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
           profiles \
           basal_lock \
+          watch_title \
           negative_insulin
           
           # the final customization listed above CANNOT have a continuation character
