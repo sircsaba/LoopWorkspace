@@ -207,6 +207,12 @@ jobs:
           # Several patches may be added per submodule.
           # Adding comments (#) may be useful to easily tell the individual patches apart.
 
+          https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
+          profiles \
+          basal_lock \
+          watch_title \
+          negative_insulin  
+
       # Patch Fastlane Match to not print tables
       - name: Patch Match Tables
         run: |
