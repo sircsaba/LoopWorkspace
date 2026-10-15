@@ -24,7 +24,7 @@ struct CredentialsView: View, HorizontalSizeClassOverride {
             Text("Glucose Monitor Login")
                 .font(.largeTitle)
                 .fontWeight(.semibold)
-            Image(frameworkImage: "nightscout", decorative: true)
+            Image(frameworkImage: "glucosemonitor", decorative: true)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 150, height: 150)

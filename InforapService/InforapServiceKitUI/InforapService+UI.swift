@@ -13,7 +13,7 @@ import InforapServiceKit
 
 extension InforapService: ServiceUI {
     public static var image: UIImage? {
-        UIImage(named: "nightscout", in: Bundle(for: ServiceUICoordinator.self), compatibleWith: nil)!
+        UIImage(named: "glucosemonitor", in: Bundle(for: ServiceUICoordinator.self), compatibleWith: nil)!
     }
 
     public static func setupViewController(colorPalette: LoopUIColorPalette, pluginHost: PluginHost) -> SetupUIResult<ServiceViewController, ServiceUI> {
