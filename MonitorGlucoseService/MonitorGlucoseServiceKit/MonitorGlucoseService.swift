@@ -23,7 +23,7 @@ public final class MonitorGlucoseService: Service {
     public static let pluginIdentifier = "MonitorGlucoseService"
 
     // Monitor Glucose: a second, independent Nightscout-compatible upload service.
-    public static let localizedTitle = "Monitor Glucose"
+    public static let localizedTitle = "Glucose Monitor"
     
     public let objectIdCacheKeepTime = TimeInterval(24 * 60 * 60)
 
@@ -386,7 +386,7 @@ extension MonitorGlucoseService: RemoteDataService {
     public func remoteNotificationWasReceived(_ notification: [String: AnyObject]) async throws {
         // Monitor Glucose: remote commands (bolus, carbs, overrides) are never accepted
         // through this service. They stay with the Nightscout service only.
-        log.default("Ignoring remote notification: remote commands are disabled for the Monitor Glucose service")
+        log.default("Ignoring remote notification: remote commands are disabled for the Glucose Monitor service")
     }
     
     private func commandSource(notification: [String: AnyObject]) throws -> RemoteCommandSource {

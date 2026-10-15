@@ -71,6 +71,7 @@
 		C1C1349627DD35060097B5AD /* LoopKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1C1349527DD35060097B5AD /* LoopKit.framework */; };
 		C1C1349827DD35260097B5AD /* LoopKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1C1349727DD35260097B5AD /* LoopKitUI.framework */; };
 		C1C1349D27DD38000097B5AD /* MonitorGlucoseServiceKitUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A91BAC3A22BC69B500ABF1BB /* MonitorGlucoseServiceKitUI.framework */; };
+		C1C134B127DD38000097B5AD /* MonitorGlucoseServiceKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A91BAC1B22BC691A00ABF1BB /* MonitorGlucoseServiceKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C1C1349E27DD38000097B5AD /* MonitorGlucoseServiceKitUI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A91BAC3A22BC69B500ABF1BB /* MonitorGlucoseServiceKitUI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C1CEBFF429BCC104007FD8A3 /* NightscoutKit in Frameworks */ = {isa = PBXBuildFile; productRef = C1CEBFF329BCC104007FD8A3 /* NightscoutKit */; };
 		C1E10F012ABF3B190036A416 /* PersistedPumpEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1E10F002ABF3B190036A416 /* PersistedPumpEvent.swift */; };
@@ -130,6 +131,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				C1C134B127DD38000097B5AD /* MonitorGlucoseServiceKit.framework in Embed Frameworks */,
 				C1C1349E27DD38000097B5AD /* MonitorGlucoseServiceKitUI.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
