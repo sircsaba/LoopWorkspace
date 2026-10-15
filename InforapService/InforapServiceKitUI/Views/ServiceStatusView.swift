@@ -18,7 +18,7 @@ struct ServiceStatusView: View, HorizontalSizeClassOverride {
     @State private var selectedItem: String?
     var body: some View {
         VStack {
-            Text("Inforap")
+            Text("Glucose Monitor")
                 .font(.largeTitle)
                 .fontWeight(.semibold)
             Image(frameworkImage: "nightscout", decorative: true)

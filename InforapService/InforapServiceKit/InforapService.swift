@@ -23,7 +23,7 @@ public final class InforapService: Service {
     public static let pluginIdentifier = "InforapService"
 
     // Inforap: a second, independent Nightscout-compatible upload service.
-    public static let localizedTitle = "Inforap"
+    public static let localizedTitle = "Glucose Monitor"
     
     public let objectIdCacheKeepTime = TimeInterval(24 * 60 * 60)
 
@@ -386,7 +386,7 @@ extension InforapService: RemoteDataService {
     public func remoteNotificationWasReceived(_ notification: [String: AnyObject]) async throws {
         // Inforap: remote commands (bolus, carbs, overrides) are never accepted
         // through this service. They stay with the Nightscout service only.
-        log.default("Ignoring remote notification: remote commands are disabled for the Inforap service")
+        log.default("Ignoring remote notification: remote commands are disabled for the Glucose Monitor service")
     }
     
     private func commandSource(notification: [String: AnyObject]) throws -> RemoteCommandSource {
