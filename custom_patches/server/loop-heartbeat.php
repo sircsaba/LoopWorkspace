@@ -58,6 +58,31 @@ $STATE_FILE = __DIR__ . '/heartbeat-state.json';
 $LOG_FILE   = __DIR__ . '/heartbeat.log';
 $LOCK_FILE  = __DIR__ . '/heartbeat.lock';
 
+// Glucose Monitor event log: when the Glucose Monitor server (a folder next to
+// this one with lib/eventlog.php and config.php, e.g. ~/bg.example.com) is
+// found, each push is also written to its log (Settings › Logs in the app).
+$EVENT_CFG = null;
+foreach (glob(dirname(__DIR__) . '/*/lib/eventlog.php') ?: [] as $f) {
+    $site = dirname($f, 2);
+    if (is_file("$site/config.php")) {
+        require_once $f;
+        $EVENT_CFG = require "$site/config.php";
+        EventLog::timezone($EVENT_CFG);
+        break;
+    }
+}
+
+function eventlog(string $msg): void {
+    global $EVENT_CFG;
+    static $db = null;
+    if (!is_array($EVENT_CFG) || !class_exists('EventLog') || !EventLog::enabled('push')) return;
+    try {
+        $db ??= new PDO($EVENT_CFG['db_dsn'], $EVENT_CFG['db_user'] ?? null, $EVENT_CFG['db_pass'] ?? null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        EventLog::add($db, 'push', $msg);
+    } catch (Throwable $e) {
+    }
+}
+
 $args    = array_slice($argv ?? [], 1);
 $VERBOSE = in_array('--verbose', $args) || in_array('--test', $args) || in_array('--check', $args);
 
@@ -71,6 +96,7 @@ function logmsg(string $msg): void {
         file_put_contents($LOG_FILE, $keep);
     }
     file_put_contents($LOG_FILE, $line, FILE_APPEND);
+    eventlog($msg);
 }
 
 function load_state(): array {
@@ -273,7 +299,10 @@ do {
     if ($r) {
         $ageMin = (time() - intdiv($r['date'], 1000)) / 60;
         if ($r['date'] > ($state['last_date'] ?? 0) && $ageMin <= $CONFIG['max_age_min']) {
-            if (send_heartbeat($state, 'new reading ' . $r['sgv'])) {
+            $age = time() - intdiv($r['date'], 1000);
+            $what = 'new Nightscout reading ' . $r['sgv'] . ' mg/dL, measured ' . date('H:i:s', intdiv($r['date'], 1000))
+                . ', seen ' . ($age < 60 ? "$age s" : intdiv($age, 60) . ' min ' . ($age % 60) . ' s') . ' later';
+            if (send_heartbeat($state, $what)) {
                 $state['last_date'] = $r['date'];
             }
             save_state($state);
