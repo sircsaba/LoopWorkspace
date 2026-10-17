@@ -67,7 +67,7 @@ foreach (glob(dirname(__DIR__) . '/*/lib/eventlog.php') ?: [] as $f) {
     if (is_file("$site/config.php")) {
         require_once $f;
         $EVENT_CFG = require "$site/config.php";
-        EventLog::timezone($EVENT_CFG);
+        if (method_exists('EventLog', 'timezone')) EventLog::timezone($EVENT_CFG);
         break;
     }
 }
