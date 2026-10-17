@@ -203,6 +203,8 @@ jobs:
           # Submodule xxxxx patches:
           # Loop heartbeat push (wakes Loop on each new Nightscout reading, see custom_patches/INSTALL.md)
           git apply --directory=Loop -v --whitespace=fix ./custom_patches/loop_heartbeat.patch
+          # Nightscout CGM: second "backup server" source with a Nightscout / Backup selector in its settings
+          git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./custom_patches/nightscout_cgm_backup_source.patch
 
           # Add patches for customization of additional submodules by following the templates above, 
           # and make sure to specify the submodule by setting "--directory=(submodule_name)".
