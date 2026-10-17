@@ -215,12 +215,21 @@ jobs:
           /bin/bash -c "$(curl -fsSL \
           https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
           profiles \
-          basal_lock \
           watch_title \
           negative_insulin
           
           # the final customization listed above CANNOT have a continuation character
           # more customizations can be pasted after this line
+
+          # Basal Lock with a 125 mg/dL lower limit: my own copy in custom_patches,
+          # so Loop and Learn updates never change the limit (see custom_patches/BASAL_LOCK.md).
+          # Applied after the list above. If a new Loop version changes the code it
+          # touches, it no longer applies and the build stops here (nothing is built).
+          git apply -v --whitespace=fix ./custom_patches/basal_lock_125.patch
+          if ! grep -qF "doubleValue: 125)...HKQuantity" LoopKit/LoopKit/Extensions/Guardrail+Preferences.swift; then
+            echo "::error::Basal Lock 125 mg/dL limit not found after patching"
+            exit 1
+          fi
       
       # Patch Fastlane Match to not print tables
       - name: Patch Match Tables
