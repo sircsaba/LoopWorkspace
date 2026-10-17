@@ -1,5 +1,11 @@
 # Basal Lock, 125 mg/dL
 
+Because the Profiles customization is in the build list, the copies that are
+actually used are `basal_lock_125_3149_profiles.patch` (Loop 3.14.9) and
+`basal_lock_125_3144_profiles.patch` (3.14.4–3.14.8), made from
+`basal_lock/main…_basal_lock_profiles.patch`. The copies without `_profiles` are
+kept for a build without Profiles; the build simply applies whichever one fits.
+
 `basal_lock_125_3144.patch` and `basal_lock_125_3149.patch` are Loop and Learn's
 Basal Lock customization (`basal_lock/main3144_basal_lock.patch` for Loop
 3.14.4–3.14.8 and `main3149_basal_lock.patch` for 3.14.9) with the lower limit
