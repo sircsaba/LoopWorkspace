@@ -201,6 +201,8 @@ jobs:
           #curl url_to_github_commit.patch | git apply --directory=LoopKit -v --whitespace=fix
 
           # Submodule xxxxx patches:
+          # Loop heartbeat push (wakes Loop on each new Nightscout reading, see custom_patches/INSTALL.md)
+          git apply --directory=Loop -v --whitespace=fix ./custom_patches/loop_heartbeat.patch
 
           # Add patches for customization of additional submodules by following the templates above, 
           # and make sure to specify the submodule by setting "--directory=(submodule_name)".

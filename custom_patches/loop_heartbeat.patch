@@ -1,0 +1,108 @@
+diff --git a/Loop/AppDelegate.swift b/Loop/AppDelegate.swift
+index f54306c..0ff28aa 100644
+--- a/Loop/AppDelegate.swift
++++ b/Loop/AppDelegate.swift
+@@ -68,6 +68,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
+     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable : Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+         log.default(#function)
+ 
++        // Heartbeat push from bg.inforap.com: wake Loop to fetch the new Nightscout reading and loop.
++        if userInfo[LoopAppManager.heartbeatUserInfoKey] != nil {
++            loopAppManager.handleHeartbeatNotification {
++                completionHandler(.newData)
++            }
++            return
++        }
++
+         completionHandler(loopAppManager.handleRemoteNotification(userInfo as? [String: AnyObject]) ? .noData : .failed)
+     }
+ 
+diff --git a/Loop/Managers/DeviceDataManager.swift b/Loop/Managers/DeviceDataManager.swift
+index 3d07128..4d51b53 100644
+--- a/Loop/Managers/DeviceDataManager.swift
++++ b/Loop/Managers/DeviceDataManager.swift
+@@ -1101,7 +1101,15 @@ extension DeviceDataManager: PumpManagerDelegate {
+         refreshCGM()
+     }
+     
+-    private func refreshCGM(_ completion: (() -> Void)? = nil) {        
++    /// Heartbeat push received from the user's own server: same as a pump BLE heartbeat.
++    func remoteHeartbeatDidFire(_ completion: @escaping () -> Void) {
++        queue.async {
++            self.log.default("Remote heartbeat push did fire")
++            self.refreshCGM(completion)
++        }
++    }
++
++    private func refreshCGM(_ completion: (() -> Void)? = nil) {
+         guard let cgmManager = cgmManager else {
+             completion?()
+             return
+diff --git a/Loop/Managers/LoopAppManager.swift b/Loop/Managers/LoopAppManager.swift
+index 04d561a..28c8271 100644
+--- a/Loop/Managers/LoopAppManager.swift
++++ b/Loop/Managers/LoopAppManager.swift
+@@ -358,6 +358,50 @@ class LoopAppManager: NSObject {
+         deviceDataManager?.servicesManager.handleRemoteNotification(notification)
+         return true
+     }
++
++    // MARK: - Heartbeat push (custom)
++
++    /// Key present in the payload of a heartbeat push sent by the user's own server.
++    static let heartbeatUserInfoKey = "loop-heartbeat"
++
++    /// Called when a heartbeat push arrives. Fetches new CGM data (which triggers a loop if one is due)
++    /// and keeps the app alive briefly so the loop can finish talking to the pump.
++    func handleHeartbeatNotification(_ completion: @escaping () -> Void) {
++        removeDeliveredHeartbeatNotifications()
++
++        guard let deviceDataManager = deviceDataManager else {
++            completion()
++            return
++        }
++
++        var backgroundTask = UIBackgroundTaskIdentifier.invalid
++        let endBackgroundTask = {
++            if backgroundTask != .invalid {
++                UIApplication.shared.endBackgroundTask(backgroundTask)
++                backgroundTask = .invalid
++            }
++        }
++        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Loop Heartbeat", expirationHandler: endBackgroundTask)
++        // Give the loop up to 25 s to complete pump communication, then release the background time.
++        DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: endBackgroundTask)
++
++        deviceDataManager.remoteHeartbeatDidFire {
++            DispatchQueue.main.async(execute: completion)
++        }
++    }
++
++    /// Heartbeats sent in "passive" mode are visible notifications; clear them so they don't pile up.
++    private func removeDeliveredHeartbeatNotifications() {
++        let center = UNUserNotificationCenter.current()
++        center.getDeliveredNotifications { notifications in
++            let ids = notifications
++                .filter { $0.request.content.userInfo[LoopAppManager.heartbeatUserInfoKey] != nil }
++                .map { $0.request.identifier }
++            if !ids.isEmpty {
++                center.removeDeliveredNotifications(withIdentifiers: ids)
++            }
++        }
++    }
+     
+     // MARK: - Deeplinking
+     
+@@ -527,6 +571,12 @@ extension LoopAppManager: DeviceOrientationController {
+ 
+ extension LoopAppManager: UNUserNotificationCenterDelegate {
+     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
++        // Never show heartbeat pushes while Loop is open (it already fetches on its own in the foreground).
++        if notification.request.content.userInfo[LoopAppManager.heartbeatUserInfoKey] != nil {
++            completionHandler([])
++            return
++        }
++
+         switch notification.request.identifier {
+         // TODO: Until these notifications are converted to use the new alert system, they shall still show in the foreground
+         case LoopNotificationCategory.bolusFailure.rawValue,
