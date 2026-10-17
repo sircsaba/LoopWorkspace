@@ -225,7 +225,19 @@ jobs:
           # so Loop and Learn updates never change the limit (see custom_patches/BASAL_LOCK.md).
           # Applied after the list above. If a new Loop version changes the code it
           # touches, it no longer applies and the build stops here (nothing is built).
-          git apply -v --whitespace=fix ./custom_patches/basal_lock_125.patch
+          # One copy per Loop version (all with 125): the one that fits is applied.
+          applied=""
+          for p in $(ls ./custom_patches/basal_lock_125_*.patch | sort -r); do
+            if git apply --check --whitespace=fix "$p" 2>/dev/null; then
+              git apply -v --whitespace=fix "$p" && applied="$p"
+              break
+            fi
+          done
+          if [ -z "$applied" ]; then
+            echo "::error::No basal_lock_125 patch fits this Loop version: see custom_patches/BASAL_LOCK.md"
+            exit 1
+          fi
+          echo "Basal Lock 125 applied from $applied"
           if ! grep -qF "doubleValue: 125)...HKQuantity" LoopKit/LoopKit/Extensions/Guardrail+Preferences.swift; then
             echo "::error::Basal Lock 125 mg/dL limit not found after patching"
             exit 1

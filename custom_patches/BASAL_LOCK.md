@@ -1,8 +1,9 @@
 # Basal Lock, 125 mg/dL
 
-`basal_lock_125.patch` is Loop and Learn's Basal Lock customization
-(`basal_lock/main3149_basal_lock.patch`, for Loop 3.14.9) with the lower limit changed from
-200 to 125 mg/dL. It is applied by `build_loop.yml` in the "Customize Loop"
+`basal_lock_125_3144.patch` and `basal_lock_125_3149.patch` are Loop and Learn's
+Basal Lock customization (`basal_lock/main3144_basal_lock.patch` for Loop
+3.14.4–3.14.8 and `main3149_basal_lock.patch` for 3.14.9) with the lower limit
+changed from 200 to 125 mg/dL. The build applies the newest one that fits. It is applied by `build_loop.yml` in the "Customize Loop"
 step, after the CustomizationSelect list (where `basal_lock` was removed), and
 the build checks that the 125 limit is in the Loop code afterwards.
 
@@ -11,7 +12,8 @@ repository never change the limit.
 
 ## When a new Loop version breaks it
 
-The build stops at "Customize Loop" with `error: patch failed` on this file.
+The build stops at "Customize Loop" with "No basal_lock_125 patch fits this
+Loop version".
 Nothing is built. To fix:
 
 1. Take the newest `basal_lock/main…_basal_lock.patch` from
@@ -19,4 +21,5 @@ Nothing is built. To fix:
    only if the Profiles customization is applied too).
 2. Change `doubleValue: 200)...HKQuantity` to `doubleValue: 125)...HKQuantity`
    in it.
-3. Replace `basal_lock_125.patch` with it, commit, and build again.
+3. Save it as `basal_lock_125_<version>.patch` (e.g. `basal_lock_125_3150.patch`),
+   commit, and build again.
