@@ -1,0 +1,340 @@
+diff --git a/NightscoutRemoteCGM/NightscoutAPIService.swift b/NightscoutRemoteCGM/NightscoutAPIService.swift
+index e9385a6..576adbe 100644
+--- a/NightscoutRemoteCGM/NightscoutAPIService.swift
++++ b/NightscoutRemoteCGM/NightscoutAPIService.swift
+@@ -146,6 +146,34 @@ extension KeychainManager {
+     }
+ }
+ 
++// MARK: - Backup server (custom): a second Nightscout-compatible site, e.g. bg.inforap.com
++
++extension KeychainManager {
++    private enum BackupConfig {
++        static let label = "NightscoutCGMBackup"
++    }
++
++    func setNightscoutCgmBackupCredentials(_ url: URL?, apiSecret: String?) {
++        do {
++            let credentials: InternetCredentials?
++            if let url = url, let apiSecret = apiSecret, !apiSecret.isEmpty {
++                credentials = InternetCredentials(username: BackupConfig.label, password: apiSecret, url: url)
++            } else {
++                credentials = nil
++            }
++            try replaceInternetCredentials(credentials, forAccount: BackupConfig.label)
++        } catch {}
++    }
++
++    func getNightscoutCgmBackupURL() -> URL? {
++        return try? getInternetCredentials(account: BackupConfig.label).url
++    }
++
++    func getNightscoutCgmBackupAPISecret() -> String? {
++        return try? getInternetCredentials(account: BackupConfig.label).password
++    }
++}
++
+ extension NightscoutAPIService {
+     public convenience init(keychainManager: KeychainManager = KeychainManager()) {
+         self.init(url: keychainManager.getNightscoutCgmURL(), apiSecret: keychainManager.getNightscoutAPISecret())
+diff --git a/NightscoutRemoteCGM/NightscoutAPISettingsViewController.swift b/NightscoutRemoteCGM/NightscoutAPISettingsViewController.swift
+index 7e94ba1..f9c5308 100644
+--- a/NightscoutRemoteCGM/NightscoutAPISettingsViewController.swift
++++ b/NightscoutRemoteCGM/NightscoutAPISettingsViewController.swift
+@@ -27,7 +27,7 @@ public final class NightscoutAPISettingsViewController: UIHostingController<Sett
+     public init(cgmManager: NightscoutRemoteCGM, displayGlucosePreference: DisplayGlucosePreference) {
+         self.cgmManager = cgmManager
+         self.displayGlucosePreference = displayGlucosePreference
+-        self.viewModel = SettingsViewModel(nightscoutService: cgmManager.nightscoutService)
++        self.viewModel = SettingsViewModel(nightscoutService: cgmManager.nightscoutService, cgmManager: cgmManager)
+         let view = SettingsView(viewModel: self.viewModel)
+         super.init(rootView: view)
+ 
+diff --git a/NightscoutRemoteCGM/NightscoutRemoteCGM.swift b/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
+index 2021658..44a6408 100644
+--- a/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
++++ b/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
+@@ -37,6 +37,7 @@ public class NightscoutRemoteCGM: CGMManager {
+ 
+     private enum Config {
+         static let useFilterKey = "NightscoutRemoteCGM.useFilter"
++        static let useBackupKey = "NightscoutRemoteCGM.useBackup"
+         static let filterNoise = 2.5
+     }
+ 
+@@ -49,14 +50,59 @@ public class NightscoutRemoteCGM: CGMManager {
+     public convenience required init?(rawState: CGMManager.RawStateValue) {
+         self.init()
+         useFilter = rawState[Config.useFilterKey] as? Bool ?? false
++        useBackup = rawState[Config.useBackupKey] as? Bool ?? false
+     }
+ 
+     public var rawState: CGMManager.RawStateValue {
+         [
+-            Config.useFilterKey: useFilter
++            Config.useFilterKey: useFilter,
++            Config.useBackupKey: useBackup
+         ]
+     }
+ 
++    // MARK: - Data source: main Nightscout or backup server (custom)
++
++    /// false = readings come from the main Nightscout site, true = from the backup server.
++    public var useBackup = false {
++        didSet {
++            guard useBackup != oldValue else { return }
++            processQueue.async {
++                self.backupClient = nil
++                self.latestBackfill = nil   // fetch from the new source right away
++            }
++            delegate.notify { delegate in
++                delegate?.cgmManagerDidUpdateState(self)
++            }
++        }
++    }
++
++    public var backupURL: URL? { keychain.getNightscoutCgmBackupURL() }
++
++    public var backupAPISecret: String? { keychain.getNightscoutCgmBackupAPISecret() }
++
++    public var hasBackup: Bool { backupURL != nil && backupAPISecret != nil }
++
++    /// Address readings are currently taken from.
++    public var activeURL: URL? { useBackup ? backupURL : nightscoutService.url }
++
++    public func setBackupCredentials(url: URL?, apiSecret: String?) {
++        keychain.setNightscoutCgmBackupCredentials(url, apiSecret: apiSecret)
++        processQueue.async {
++            self.backupClient = nil
++            if self.useBackup { self.latestBackfill = nil }
++        }
++    }
++
++    private var backupClient: NightscoutFetcher?
++
++    private var activeClient: NightscoutFetcher? {
++        guard useBackup else { return nightscoutService.client }
++        if backupClient == nil, let url = backupURL, let secret = backupAPISecret {
++            backupClient = NightscoutFetcher(url: url, apiSecret: secret)
++        }
++        return backupClient
++    }
++
+     private let keychain = KeychainManager()
+ 
+     public var nightscoutService: NightscoutAPIService {
+@@ -94,7 +140,7 @@ public class NightscoutRemoteCGM: CGMManager {
+     private var isFetching = false
+ 
+     public func fetchNewDataIfNeeded(_ completion: @escaping (CGMReadingResult) -> Void) {
+-        guard let nightscoutClient = nightscoutService.client, !isFetching else {
++        guard let nightscoutClient = activeClient, !isFetching else {
+             delegateQueue.async {
+                 completion(.noData)
+             }
+@@ -197,11 +243,11 @@ public class NightscoutRemoteCGM: CGMManager {
+     public var device: HKDevice? = nil
+ 
+     public var debugDescription: String {
+-        "## NightscoutRemoteCGM\nlatestBackfill: \(String(describing: latestBackfill))\n"
++        "## NightscoutRemoteCGM\nsource: \(useBackup ? "backup" : "main") \(activeURL?.host ?? "-")\nlatestBackfill: \(String(describing: latestBackfill))\n"
+     }
+ 
+     public var appURL: URL? {
+-        guard let url = nightscoutService.url else { return nil }
++        guard let url = activeURL else { return nil }
+         switch url.absoluteString {
+         case "http://127.0.0.1:1979":
+             return URL(string: "spikeapp://")
+diff --git a/NightscoutRemoteCGM/SettingsView.swift b/NightscoutRemoteCGM/SettingsView.swift
+index a3a9c16..035e944 100644
+--- a/NightscoutRemoteCGM/SettingsView.swift
++++ b/NightscoutRemoteCGM/SettingsView.swift
+@@ -13,22 +13,54 @@ private let frameworkBundle = Bundle(for: SettingsViewModel.self)
+ 
+ final class SettingsViewModel: ObservableObject {
+     let nightscoutService: NightscoutAPIService
++    /// The CGM manager, when shown from Loop's CGM settings (nil in previews).
++    let cgmManager: NightscoutRemoteCGM?
++
+     @Published var serviceStatus: SettingsViewServiceStatus = .unknown
++
++    // Backup server (custom)
++    @Published var useBackup: Bool = false {
++        didSet {
++            guard useBackup != oldValue else { return }
++            cgmManager?.useBackup = useBackup
++            updateServiceStatus()
++        }
++    }
++    @Published var backupURLText: String = ""
++    @Published var backupSecretText: String = ""
++    @Published var backupStatus: SettingsViewServiceStatus = .unknown
++    @Published var hasBackup: Bool = false
++
+     var url: String {
+         return nightscoutService.url?.absoluteString ?? ""
+     }
+     let onDelete = PassthroughSubject<Void, Never>()
+     let onClose = PassthroughSubject<Void, Never>()
+ 
+-    init(nightscoutService: NightscoutAPIService) {
++    init(nightscoutService: NightscoutAPIService, cgmManager: NightscoutRemoteCGM? = nil) {
+         self.nightscoutService = nightscoutService
++        self.cgmManager = cgmManager
++        if let cgmManager = cgmManager {
++            self.useBackup = cgmManager.useBackup
++            self.backupURLText = cgmManager.backupURL?.absoluteString ?? ""
++            self.hasBackup = cgmManager.hasBackup
++        }
+     }
+-    
++
+     func viewDidAppear(){
+         updateServiceStatus()
+     }
+-    
++
+     private func updateServiceStatus(){
++        serviceStatus = .unknown
++        if useBackup {
++            guard let url = cgmManager?.backupURL, let secret = cgmManager?.backupAPISecret else {
++                serviceStatus = .error(NightscoutAPIService.NightScoutAPIServiceError.missingURL)
++                return
++            }
++            check(url: url, secret: secret) { self.serviceStatus = $0 }
++            return
++        }
+         nightscoutService.checkServiceStatus { result in
+             DispatchQueue.main.async {
+                 switch result {
+@@ -40,16 +72,63 @@ final class SettingsViewModel: ObservableObject {
+             }
+         }
+     }
+-    
++
++    /// Tests the backup address and secret, and saves them if they work.
++    func saveBackup() {
++        var text = backupURLText.trimmingCharacters(in: .whitespacesAndNewlines)
++        if !text.isEmpty && !text.lowercased().hasPrefix("http") {
++            text = "https://" + text
++        }
++        while text.hasSuffix("/") { text.removeLast() }
++        let secret = backupSecretText.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard let url = URL(string: text), url.host != nil else {
++            backupStatus = .error(NightscoutAPIService.NightScoutAPIServiceError.missingURL)
++            return
++        }
++        // Keep the saved secret when only the address was changed.
++        let useSecret = secret.isEmpty ? (cgmManager?.backupAPISecret ?? "") : secret
++        guard !useSecret.isEmpty else {
++            backupStatus = .error(NightscoutAPIService.NightScoutAPIServiceError.missingURL)
++            return
++        }
++        backupStatus = .checking
++        check(url: url, secret: useSecret) { status in
++            self.backupStatus = status
++            if case .ok = status {
++                self.cgmManager?.setBackupCredentials(url: url, apiSecret: useSecret)
++                self.backupURLText = url.absoluteString
++                self.backupSecretText = ""
++                self.hasBackup = true
++                if self.useBackup { self.updateServiceStatus() }
++            }
++        }
++    }
++
++    private func check(url: URL, secret: String, _ done: @escaping (SettingsViewServiceStatus) -> Void) {
++        NightscoutFetcher(url: url, apiSecret: secret).fetchRecent { result in
++            DispatchQueue.main.async {
++                switch result {
++                case .success(let entries):
++                    done(entries.isEmpty ? .error(NightscoutAPIService.NightScoutAPIServiceError.emptyGlucose) : .ok)
++                case .failure(let err):
++                    done(.error(err))
++                }
++            }
++        }
++    }
++
+     enum SettingsViewServiceStatus {
+         case unknown
++        case checking
+         case ok
+         case error(Error)
+-        
++
+         func localizedString() -> String {
+             switch self {
+             case .unknown:
+                 return ""
++            case .checking:
++                return "Checking…"
+             case .ok:
+                 return "OK"
+             case.error(let err):
+@@ -62,7 +141,7 @@ final class SettingsViewModel: ObservableObject {
+ public struct SettingsView: View {
+     @ObservedObject var viewModel: SettingsViewModel
+     @State private var showingDeletionSheet = false
+-    
++
+     public var body: some View {
+         VStack {
+             Spacer()
+@@ -74,12 +153,18 @@ public struct SettingsView: View {
+                 .aspectRatio(contentMode: .fill)
+                 .frame(width: 100, height: 100)
+             Form {
+-                Section {
++                Section(header: Text("Glucose source")) {
++                    Picker("Source", selection: $viewModel.useBackup) {
++                        Text("Nightscout").tag(false)
++                        Text("Backup server").tag(true)
++                    }
++                    .pickerStyle(SegmentedPickerStyle())
++                    .disabled(!viewModel.hasBackup && !viewModel.useBackup)
+                     HStack {
+                         Text("URL")
+                             .padding(.leading, 10)
+                         Spacer()
+-                        Text(viewModel.url)
++                        Text(viewModel.useBackup ? viewModel.backupURLText : viewModel.url)
+                             .padding(.leading, 10)
+                     }
+                     HStack {
+@@ -90,6 +175,24 @@ public struct SettingsView: View {
+                             .padding(.leading, 10)
+                     }
+                 }
++                Section(header: Text("Backup server"),
++                        footer: Text("A second Nightscout-compatible site (for example bg.inforap.com). Use the selector above to read glucose from it when Nightscout is down. Leave the secret empty to keep the one already saved.")) {
++                    TextField("https://bg.example.com", text: $viewModel.backupURLText)
++                        .keyboardType(.URL)
++                        .autocapitalization(.none)
++                        .disableAutocorrection(true)
++                    SecureField(viewModel.hasBackup ? "API secret (saved)" : "API secret", text: $viewModel.backupSecretText)
++                        .autocapitalization(.none)
++                        .disableAutocorrection(true)
++                    HStack {
++                        Button("Test and save backup") {
++                            viewModel.saveBackup()
++                        }
++                        Spacer()
++                        Text(viewModel.backupStatus.localizedString())
++                            .foregroundColor(.secondary)
++                    }
++                }
+                 Section {
+                     HStack {
+                         Spacer()
+@@ -111,7 +214,7 @@ public struct SettingsView: View {
+             viewModel.viewDidAppear()
+         }
+     }
+-    
++
+     private var deleteCGMButton: some View {
+         Button(action: {
+             showingDeletionSheet = true

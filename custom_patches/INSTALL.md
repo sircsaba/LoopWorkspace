@@ -101,3 +101,27 @@ reading arrives.
 
 **Limits:** never swipe Loop closed in the app switcher (iOS then blocks all pushes to it), and
 Low Power Mode reduces background pushes.
+
+---
+
+# Backup glucose source (bg.inforap.com)
+
+`nightscout_cgm_backup_source.patch` adds a **Glucose source** selector to Loop's Nightscout Remote CGM
+settings (Loop → Settings → CGM): **Nightscout** or **Backup server**. Both addresses stay saved, so
+switching is one tap. Loop fetches from the new source immediately.
+
+One-time setup in Loop: Settings → CGM → *Backup server* section → URL `https://bg.inforap.com`,
+API secret = `api_secret` from bg.inforap.com's `config.php` → **Test and save backup** (shows OK).
+
+WHC heartbeat as automatic standby — in `~/loop-heartbeat/loop-heartbeat.php` on WHC:
+
+```php
+'ns_url'        => 'https://bg.inforap.com',      // this server's own readings (libre.php)
+'ns_token'      => 'readable-val',                // a read token from bg.inforap.com config.php
+'standby_url'   => 'https://nsval.mooo.com',      // main Nightscout
+'standby_token' => '',                            // read token for nsval if it isn't public
+```
+
+While nsval.mooo.com has a reading less than 8 minutes old, WHC stays quiet (the VPS heartbeat works).
+When nsval is stale or down, WHC sends the heartbeats from its own LibreLinkUp readings. The log shows
+`Main Nightscout is stale or down: sending heartbeats from this server` when it takes over.

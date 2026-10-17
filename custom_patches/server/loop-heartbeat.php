@@ -51,6 +51,18 @@ $CONFIG = [
     // Extra safety: also send a heartbeat if none was sent for this many minutes, even without a new
     // reading, so Loop keeps checking the pump (0 = off).
     'keepalive_min' => 0,
+
+    // LibreLinkUp gives a reading every minute but Loop loops every ~5 min: push at most this often.
+    'min_gap_min'   => 4.5,
+
+    // BACKUP / STANDBY MODE (for running this on bg.inforap.com as the fallback):
+    // set 'ns_url' to this server (https://bg.inforap.com, with a read token in 'ns_token') and
+    // 'standby_url' to the main Nightscout. While the main Nightscout has a fresh reading the script
+    // stays quiet (the VPS sends the heartbeats); as soon as Nightscout is stale or down it takes over
+    // with this server's own readings. Leave 'standby_url' empty to always send.
+    'standby_url'       => '',
+    'standby_token'     => '',
+    'standby_fresh_min' => 8,
 ];
 // ============================================================================
 
@@ -110,11 +122,13 @@ function save_state(array $s): void {
     file_put_contents($STATE_FILE, json_encode($s, JSON_PRETTY_PRINT));
 }
 
-function ns_get(string $path): ?array {
+function ns_get(string $path, ?string $base = null, ?string $token = null): ?array {
     global $CONFIG;
-    $url = rtrim($CONFIG['ns_url'], '/') . $path;
-    if ($CONFIG['ns_token'] !== '') {
-        $url .= (strpos($url, '?') === false ? '?' : '&') . 'token=' . urlencode($CONFIG['ns_token']);
+    $base  = $base ?? $CONFIG['ns_url'];
+    $token = $token ?? $CONFIG['ns_token'];
+    $url = rtrim($base, '/') . $path;
+    if ($token !== '') {
+        $url .= (strpos($url, '?') === false ? '?' : '&') . 'token=' . urlencode($token);
     }
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -139,6 +153,24 @@ function latest_reading(): ?array {
     $e = ns_get('/api/v1/entries/sgv.json?count=1');
     if (!$e || !isset($e[0]['date'])) return null;
     return ['date' => (int)$e[0]['date'], 'sgv' => $e[0]['sgv'] ?? null];
+}
+
+/**
+ * True when the main Nightscout ('standby_url') has a fresh reading, so this server should stay
+ * quiet. Logs once when it switches between standby and active.
+ */
+function main_site_ok(array &$state): bool {
+    global $CONFIG;
+    if (trim((string)$CONFIG['standby_url']) === '') return false;
+    $e = ns_get('/api/v1/entries/sgv.json?count=1', $CONFIG['standby_url'], (string)$CONFIG['standby_token']);
+    $ok = $e && isset($e[0]['date'])
+        && (time() - intdiv((int)$e[0]['date'], 1000)) / 60 <= $CONFIG['standby_fresh_min'];
+    $was = $state['main_ok'] ?? null;
+    if ($was !== $ok) {
+        logmsg($ok ? 'Main Nightscout is fine: standing by' : 'Main Nightscout is stale or down: sending heartbeats from this server');
+        $state['main_ok'] = $ok;
+    }
+    return $ok;
 }
 
 /** [deviceToken, bundleId] from config or from the Nightscout profile Loop uploads. */
@@ -298,17 +330,22 @@ do {
     $r = latest_reading();
     if ($r) {
         $ageMin = (time() - intdiv($r['date'], 1000)) / 60;
-        if ($r['date'] > ($state['last_date'] ?? 0) && $ageMin <= $CONFIG['max_age_min']) {
+        $sinceMin = (time() - ($state['last_push'] ?? 0)) / 60;
+        if ($r['date'] > ($state['last_date'] ?? 0) && $ageMin <= $CONFIG['max_age_min']
+            && $sinceMin >= $CONFIG['min_gap_min']) {
             $age = time() - intdiv($r['date'], 1000);
-            $what = 'new Nightscout reading ' . $r['sgv'] . ' mg/dL, measured ' . date('H:i:s', intdiv($r['date'], 1000))
+            $what = 'new reading ' . $r['sgv'] . ' mg/dL, measured ' . date('H:i:s', intdiv($r['date'], 1000))
                 . ', seen ' . ($age < 60 ? "$age s" : intdiv($age, 60) . ' min ' . ($age % 60) . ' s') . ' later';
-            if (send_heartbeat($state, $what)) {
+            if (main_site_ok($state)) {
+                $state['last_date'] = $r['date'];          // main site handles it
+            } elseif (send_heartbeat($state, $what)) {
                 $state['last_date'] = $r['date'];
             }
             save_state($state);
-        } elseif ($CONFIG['keepalive_min'] > 0
-                  && time() - ($state['last_push'] ?? 0) >= $CONFIG['keepalive_min'] * 60) {
-            send_heartbeat($state, 'keep-alive');
+        } elseif ($CONFIG['keepalive_min'] > 0 && $sinceMin >= $CONFIG['keepalive_min']
+                  && time() - ($state['keepalive_checked'] ?? 0) >= 60) {
+            $state['keepalive_checked'] = time();          // check the main site at most once a minute
+            if (!main_site_ok($state)) send_heartbeat($state, 'keep-alive');
             save_state($state);
         }
     }
