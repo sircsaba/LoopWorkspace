@@ -1,0 +1,122 @@
+name: 0. Check Loop update
+run-name: Check Loop update (${{ inputs.branch || 'inforap-service' }})
+
+# Tells you, in a few minutes on a cheap Linux runner, whether the newest Loop
+# from LoopKit still takes all your changes: the merge into your branch, the
+# patches in custom_patches/ and the Loop and Learn customizations, done with the
+# exact commands of the "Customize Loop" step in build_loop.yml.
+#   Green  = just run "4. Build Loop" (nothing to change).
+#   Red    = something no longer fits; the summary says what. Nothing was built,
+#            pushed or changed in your repository.
+# Runs every morning by itself and from Actions › "0. Check Loop update".
+# It cannot compile Swift (that needs a Mac): the build itself does that.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch you build Loop from
+        default: inforap-service
+  schedule:
+    - cron: '17 11 * * *' # 7:17 Toronto time (EDT), every day
+
+permissions:
+  contents: read
+
+env:
+  BRANCH: ${{ inputs.branch || 'inforap-service' }}
+  UPSTREAM_REPO: https://github.com/LoopKit/LoopWorkspace.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get your branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - name: Merge the newest Loop (test only, nothing is pushed)
+        id: merge
+        run: |
+          git config user.name "Loop update check"
+          git config user.email "check@localhost"
+          before=$(grep -m1 '^LOOP_MARKETING_VERSION' VersionOverride.xcconfig | cut -d= -f2 | tr -d ' ')
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --quiet upstream "$UPSTREAM_BRANCH"
+          new=$(git rev-list --count HEAD..upstream/$UPSTREAM_BRANCH)
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          if [ "$new" -gt 0 ]; then
+            echo "LoopKit has $new new commit(s) since your last build:"
+            git log --oneline HEAD..upstream/$UPSTREAM_BRANCH | head -30
+            if ! git merge --no-edit upstream/$UPSTREAM_BRANCH; then
+              echo "### :x: The newest Loop does not merge into \`$BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
+              echo "These files changed both in LoopKit and in your branch:" >> "$GITHUB_STEP_SUMMARY"
+              git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/' >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "The build's automatic sync would stop here too. Ask for these files to be merged by hand." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+          after=$(grep -m1 '^LOOP_MARKETING_VERSION' VersionOverride.xcconfig | cut -d= -f2 | tr -d ' ')
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+
+      - name: Get Loop's parts (submodules)
+        run: GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --recursive --depth 1 --jobs 8
+
+      - name: Apply your changes exactly like the build does
+        id: patches
+        run: |
+          # The commands of the "Customize Loop" step, read from build_loop.yml,
+          # so this check always does what the build does.
+          python3 - <<'PY'
+          import sys, yaml
+          wf = yaml.safe_load(open('.github/workflows/build_loop.yml'))
+          for job in wf['jobs'].values():
+              for step in job.get('steps', []):
+                  if step.get('name') == 'Customize Loop':
+                      open('/tmp/customize.sh', 'w').write(step['run'])
+                      sys.exit(0)
+          sys.exit('No "Customize Loop" step found in build_loop.yml')
+          PY
+          set +e
+          bash -e /tmp/customize.sh 2>&1 | tee /tmp/customize.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Summary
+        if: always()
+        run: |
+          new='${{ steps.merge.outputs.new }}'
+          before='${{ steps.merge.outputs.before }}'
+          after='${{ steps.merge.outputs.after }}'
+          {
+            if [ '${{ steps.merge.outcome }}' != 'success' ]; then
+              :  # the merge step already wrote what went wrong
+            elif [ '${{ steps.patches.outcome }}' = 'success' ]; then
+              if [ "$new" = "0" ]; then
+                echo "### :white_check_mark: No new Loop from LoopKit (still $before)"
+                echo "Your changes apply cleanly. Nothing to do."
+              else
+                echo "### :white_check_mark: New Loop ($before → $after, $new new commits): just build"
+                echo "Everything still applies cleanly: run **Actions › 4. Build Loop** on \`$BRANCH\`."
+              fi
+              echo ""
+              echo "Applied:"
+              grep -E "^Applied patch|applied successfully|Basal Lock 125 applied" /tmp/customize.log | sed 's/^/- /' | sort -u
+            else
+              echo "### :x: New Loop ($before → ${after:-?}): a change no longer fits"
+              echo "Do not build yet. What failed:"
+              echo '```'
+              grep -E "error:|Error:|::error::|does not apply|not applicable|failed" /tmp/customize.log | head -20
+              echo '```'
+              echo "Ask for the failing patch to be updated for this Loop version (custom_patches/)."
+            fi
+            echo ""
+            echo "_A compile check needs a Mac: the build itself does it._"
+          } >> "$GITHUB_STEP_SUMMARY"
