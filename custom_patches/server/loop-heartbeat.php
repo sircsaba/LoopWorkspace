@@ -53,7 +53,12 @@ $CONFIG = [
     'keepalive_min' => 0,
 
     // LibreLinkUp gives a reading every minute but Loop loops every ~5 min: push at most this often.
-    'min_gap_min'   => 4.5,
+    // 4.83 = 4 min 50 s: Loop only starts a new loop when the last one is more than 4.2 minutes
+    // old, so pushes closer than this can wake Loop without a loop (then the next loop is ~10 min later).
+    'min_gap_min'   => 4.83,
+
+    // Name sent with each push and written in Loop's log ("Remote heartbeat push did fire (from whc)").
+    'source_name'   => 'whc',
 
     // BACKUP / STANDBY MODE (for running this on bg.example.com as the fallback):
     // set 'ns_url' to this server (https://bg.example.com, with a read token in 'ns_token') and
@@ -256,7 +261,7 @@ function send_heartbeat(array &$state, string $reason): bool {
         $aps['interruption-level'] = 'passive';
         $aps['thread-id'] = 'loop-heartbeat';
     }
-    $payload = json_encode(['aps' => $aps, 'loop-heartbeat' => 1, 'sent' => time()]);
+    $payload = json_encode(['aps' => $aps, 'loop-heartbeat' => 1, 'from' => (string)($CONFIG['source_name'] ?? 'whc'), 'sent' => time()]);
 
     $host = $CONFIG['apns_env'] === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
     $ch = curl_init("https://$host/3/device/$token");

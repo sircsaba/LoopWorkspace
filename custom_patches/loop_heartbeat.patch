@@ -1,14 +1,15 @@
 diff --git a/Loop/AppDelegate.swift b/Loop/AppDelegate.swift
-index f54306c..0ff28aa 100644
+index f54306c..c4d0e6f 100644
 --- a/Loop/AppDelegate.swift
 +++ b/Loop/AppDelegate.swift
-@@ -68,6 +68,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
+@@ -68,6 +68,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
      func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable : Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
          log.default(#function)
  
 +        // Heartbeat push from bg.example.com: wake Loop to fetch the new Nightscout reading and loop.
 +        if userInfo[LoopAppManager.heartbeatUserInfoKey] != nil {
-+            loopAppManager.handleHeartbeatNotification {
++            let from = userInfo["from"] as? String ?? "unknown"
++            loopAppManager.handleHeartbeatNotification(from: from) {
 +                completionHandler(.newData)
 +            }
 +            return
@@ -18,18 +19,19 @@ index f54306c..0ff28aa 100644
      }
  
 diff --git a/Loop/Managers/DeviceDataManager.swift b/Loop/Managers/DeviceDataManager.swift
-index 3d07128..4d51b53 100644
+index 09ee0c1..5705403 100644
 --- a/Loop/Managers/DeviceDataManager.swift
 +++ b/Loop/Managers/DeviceDataManager.swift
-@@ -1101,7 +1101,15 @@ extension DeviceDataManager: PumpManagerDelegate {
+@@ -1105,7 +1105,16 @@ extension DeviceDataManager: PumpManagerDelegate {
          refreshCGM()
      }
      
 -    private func refreshCGM(_ completion: (() -> Void)? = nil) {        
 +    /// Heartbeat push received from the user's own server: same as a pump BLE heartbeat.
-+    func remoteHeartbeatDidFire(_ completion: @escaping () -> Void) {
++    func remoteHeartbeatDidFire(from: String = "unknown", _ completion: @escaping () -> Void) {
 +        queue.async {
-+            self.log.default("Remote heartbeat push did fire")
++            let sinceLoop = self.loopManager.lastLoopCompleted.map { String(format: "%.1f", -$0.timeIntervalSinceNow / 60) } ?? "-"
++            self.log.default("Remote heartbeat push did fire (from %{public}@, last loop %{public}@ min ago)", from, sinceLoop)
 +            self.refreshCGM(completion)
 +        }
 +    }
@@ -38,11 +40,20 @@ index 3d07128..4d51b53 100644
          guard let cgmManager = cgmManager else {
              completion?()
              return
+@@ -1121,6 +1130,8 @@ extension DeviceDataManager: PumpManagerDelegate {
+                     if self.loopManager.lastLoopCompleted == nil || self.loopManager.lastLoopCompleted!.timeIntervalSinceNow < -.minutes(4.2) {
+                         self.log.default("Triggering Loop from refreshCGM()")
+                         self.checkPumpDataAndLoop()
++                    } else if let last = self.loopManager.lastLoopCompleted {
++                        self.log.default("Not looping from refreshCGM(): last loop only %{public}@ min ago", String(format: "%.1f", -last.timeIntervalSinceNow / 60))
+                     }
+                     completion?()
+                 }
 diff --git a/Loop/Managers/LoopAppManager.swift b/Loop/Managers/LoopAppManager.swift
-index 04d561a..28c8271 100644
+index 3971e8c..a301a1d 100644
 --- a/Loop/Managers/LoopAppManager.swift
 +++ b/Loop/Managers/LoopAppManager.swift
-@@ -358,6 +358,50 @@ class LoopAppManager: NSObject {
+@@ -370,6 +370,51 @@ class LoopAppManager: NSObject {
          deviceDataManager?.servicesManager.handleRemoteNotification(notification)
          return true
      }
@@ -54,7 +65,8 @@ index 04d561a..28c8271 100644
 +
 +    /// Called when a heartbeat push arrives. Fetches new CGM data (which triggers a loop if one is due)
 +    /// and keeps the app alive briefly so the loop can finish talking to the pump.
-+    func handleHeartbeatNotification(_ completion: @escaping () -> Void) {
++    /// [from]: which server sent it ("vps", "whc"...), written to Loop's log.
++    func handleHeartbeatNotification(from: String = "unknown", _ completion: @escaping () -> Void) {
 +        removeDeliveredHeartbeatNotifications()
 +
 +        guard let deviceDataManager = deviceDataManager else {
@@ -73,7 +85,7 @@ index 04d561a..28c8271 100644
 +        // Give the loop up to 25 s to complete pump communication, then release the background time.
 +        DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: endBackgroundTask)
 +
-+        deviceDataManager.remoteHeartbeatDidFire {
++        deviceDataManager.remoteHeartbeatDidFire(from: from) {
 +            DispatchQueue.main.async(execute: completion)
 +        }
 +    }
@@ -93,7 +105,7 @@ index 04d561a..28c8271 100644
      
      // MARK: - Deeplinking
      
-@@ -527,6 +571,12 @@ extension LoopAppManager: DeviceOrientationController {
+@@ -539,6 +584,12 @@ extension LoopAppManager: DeviceOrientationController {
  
  extension LoopAppManager: UNUserNotificationCenterDelegate {
      func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
