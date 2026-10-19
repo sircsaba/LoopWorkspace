@@ -21,7 +21,7 @@ struct CredentialsView: View, HorizontalSizeClassOverride {
     
     var body: some View {
         VStack {
-            Text("Glucose Monitor Login")
+            Text("Monitor Glucose Login")
                 .font(.largeTitle)
                 .fontWeight(.semibold)
             Image(frameworkImage: "glucosemonitor", decorative: true)
