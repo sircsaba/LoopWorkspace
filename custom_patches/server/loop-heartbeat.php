@@ -75,7 +75,7 @@ $STATE_FILE = __DIR__ . '/heartbeat-state.json';
 $LOG_FILE   = __DIR__ . '/heartbeat.log';
 $LOCK_FILE  = __DIR__ . '/heartbeat.lock';
 
-// Glucose Monitor event log: when the Glucose Monitor server (a folder next to
+// Monitor Glucose event log: when the Monitor Glucose server (a folder next to
 // this one with lib/eventlog.php and config.php, e.g. ~/bg.inforap.com) is
 // found, each push is also written to its log (Settings › Logs in the app).
 $EVENT_CFG = null;

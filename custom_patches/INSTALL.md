@@ -81,11 +81,11 @@ and Team ID. Otherwise:
 
    Each run watches Nightscout for 50 s, checking every 10 s, so a new reading triggers a push within ~10 s.
 
-## Event log (Glucose Monitor)
+## Event log (Monitor Glucose)
 
-When the Glucose Monitor server is in a folder next to `loop-heartbeat/` (e.g. `~/bg.inforap.com`,
+When the Monitor Glucose server is in a folder next to `loop-heartbeat/` (e.g. `~/bg.inforap.com`,
 with `lib/eventlog.php`), every push is also written to its event log, next to the readings and
-the loop runs: Glucose Monitor › Settings › **Logs**. Nothing to set up.
+the loop runs: Monitor Glucose › Settings › **Logs**. Nothing to set up.
 
 ## 4. Check it works
 
