@@ -214,6 +214,9 @@ jobs:
           # The lines below add the customizations listed using the CustomizationSelect script
           # The "\" is a continuation character 
           #   the line following a "\" should not be blank
+          # Patches come from Loop and Learn's own customization repository, which is
+          # kept up to date for each new Loop version.
+          export PATCH_REPO=https://github.com/loopandlearn/customization.git PATCH_BRANCH=main
           /bin/bash -c "$(curl -fsSL \
           https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
           profiles \
