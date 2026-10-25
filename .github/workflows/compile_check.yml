@@ -1,0 +1,31 @@
+name: Compile check (no signing)
+
+on:
+  push:
+    branches: [second-nightscout-service]
+
+jobs:
+  compile:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - name: Select Xcode version
+        run: "sudo xcode-select --switch /Applications/Xcode_27.0.app/Contents/Developer"
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Apply the Nightscout CGM backup source patch
+        run: git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./nightscout-cgm-backup-source.patch
+      - name: Build Loop (simulator, no signing)
+        run: |
+          set -o pipefail
+          xcodebuild -workspace LoopWorkspace.xcworkspace -scheme LoopWorkspace \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*SecondNightscout|BUILD (SUCCEEDED|FAILED)|\*\* " || true
+          test "${PIPESTATUS[0]}" = 0
+      - name: Check the plugin and its framework are in the app
+        run: |
+          app=$(find ~/Library/Developer/Xcode/DerivedData -path "*Release-iphonesimulator/Loop.app" -maxdepth 6 | head -1)
+          echo "$app"
+          ls "$app/PlugIns" | tee /dev/stderr | grep -q SecondNightscoutServiceKitPlugin.loopplugin
+          ls "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks"
