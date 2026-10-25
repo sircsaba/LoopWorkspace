@@ -16,23 +16,38 @@ jobs:
           submodules: recursive
       - name: Apply the Nightscout CGM backup source patch
         run: git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./nightscout-cgm-backup-source.patch
-      - name: Watch platform
-        run: xcodebuild -showsdks | grep -i watch || xcodebuild -downloadPlatform watchOS
-      - name: Build Loop (iPhone, no signing)
+      - name: Make a scheme with every plugin and framework, without the Loop app and watch app
+        run: |
+          python3 - <<'PY'
+          import re
+          d = 'LoopWorkspace.xcworkspace/xcshareddata/xcschemes/'
+          s = open(d + 'LoopWorkspace.xcscheme').read()
+          entries = re.findall(r'\n\s*<BuildActionEntry.*?</BuildActionEntry>', s, re.S)
+          for e in entries:
+              if 'container:Loop/Loop.xcodeproj' in e:
+                  s = s.replace(e, '')
+          s = re.sub(r'<LaunchAction.*?</LaunchAction>', '', s, flags=re.S)
+          s = re.sub(r'<ProfileAction.*?</ProfileAction>', '', s, flags=re.S)
+          open(d + 'Check.xcscheme', 'w').write(s)
+          print(sum('container:Loop/Loop.xcodeproj' in e for e in entries), 'Loop entries removed of', len(entries))
+          PY
+      - name: Build all plugins (iPhone, no signing)
         run: |
           set +e
-          xcodebuild -workspace LoopWorkspace.xcworkspace -scheme LoopWorkspace \
+          xcodebuild -workspace LoopWorkspace.xcworkspace -scheme Check \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath build -archivePath build/Loop.xcarchive CODE_SIGNING_ALLOWED=NO archive > build.log 2>&1
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
           rc=$?
           grep -E "error:" build.log | sort -u | head -15 | while read -r l; do echo "::error::${l:0:900}"; done
+          grep -E "warning: .*(SecondNightscout|NightscoutRemoteCGM/)" build.log | sort -u | head -10 | while read -r l; do echo "::warning::${l:0:600}"; done
           tail -3 build.log | while read -r l; do echo "::notice::tail: ${l:0:500}"; done
           exit $rc
-      - name: Check the plugin and its framework are in the app
+      - name: Check the plugin and its framework
         run: |
-          app=$(find build/Loop.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -1)
-          echo "::notice::app: $app"
-          echo "::notice::plugins: $(ls "$app/PlugIns" | tr '\n' ' ')"
-          echo "::notice::second plugin frameworks: $(ls "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks" | tr '\n' ' ')"
-          echo "::notice::nightscout plugin frameworks: $(ls "$app/PlugIns/NightscoutServiceKitPlugin.loopplugin/Frameworks" | tr '\n' ' ')"
-          test -d "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks/SecondNightscoutServiceKit.framework"
+          p=$(find build/Build/Products -maxdepth 2 -name SecondNightscoutServiceKitPlugin.loopplugin | head -1)
+          echo "::notice::plugin: $p"
+          echo "::notice::plugin frameworks: $(ls "$p/Frameworks" | tr '\n' ' ')"
+          test -d "$p/Frameworks/SecondNightscoutServiceKit.framework"
+          c=$(find build/Build/Products -maxdepth 2 -name "NightscoutRemoteCGM*.loopplugin" | head -1)
+          echo "::notice::cgm plugin: $c"
+          test -n "$c"
