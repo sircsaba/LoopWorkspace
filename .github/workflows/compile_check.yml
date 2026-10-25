@@ -18,14 +18,19 @@ jobs:
         run: git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./nightscout-cgm-backup-source.patch
       - name: Build Loop (simulator, no signing)
         run: |
-          set -o pipefail
+          set +e
           xcodebuild -workspace LoopWorkspace.xcworkspace -scheme LoopWorkspace \
             -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|warning: .*SecondNightscout|BUILD (SUCCEEDED|FAILED)|\*\* " || true
-          test "${PIPESTATUS[0]}" = 0
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > build.log 2>&1
+          rc=$?
+          grep -E "error:" build.log | sort -u | head -15 | while read -r l; do echo "::error::${l:0:900}"; done
+          tail -3 build.log | while read -r l; do echo "::notice::tail: ${l:0:500}"; done
+          exit $rc
       - name: Check the plugin and its framework are in the app
         run: |
-          app=$(find ~/Library/Developer/Xcode/DerivedData -path "*Release-iphonesimulator/Loop.app" -maxdepth 6 | head -1)
-          echo "$app"
-          ls "$app/PlugIns" | tee /dev/stderr | grep -q SecondNightscoutServiceKitPlugin.loopplugin
-          ls "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks"
+          app=$(find build/Build/Products -maxdepth 2 -name Loop.app | head -1)
+          echo "::notice::app: $app"
+          echo "::notice::plugins: $(ls "$app/PlugIns" | tr '\n' ' ')"
+          echo "::notice::second plugin frameworks: $(ls "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks" | tr '\n' ' ')"
+          echo "::notice::nightscout plugin frameworks: $(ls "$app/PlugIns/NightscoutServiceKitPlugin.loopplugin/Frameworks" | tr '\n' ' ')"
+          test -d "$app/PlugIns/SecondNightscoutServiceKitPlugin.loopplugin/Frameworks/SecondNightscoutServiceKit.framework"
