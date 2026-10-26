@@ -1,5 +1,5 @@
 diff --git a/Loop/AppDelegate.swift b/Loop/AppDelegate.swift
-index f54306c..c4d0e6f 100644
+index f54306c3..848d8165 100644
 --- a/Loop/AppDelegate.swift
 +++ b/Loop/AppDelegate.swift
 @@ -68,6 +68,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -19,10 +19,10 @@ index f54306c..c4d0e6f 100644
      }
  
 diff --git a/Loop/Managers/DeviceDataManager.swift b/Loop/Managers/DeviceDataManager.swift
-index 09ee0c1..5705403 100644
+index cabca1e6..24cf0c53 100644
 --- a/Loop/Managers/DeviceDataManager.swift
 +++ b/Loop/Managers/DeviceDataManager.swift
-@@ -1105,7 +1105,16 @@ extension DeviceDataManager: PumpManagerDelegate {
+@@ -1117,7 +1117,16 @@ extension DeviceDataManager: PumpManagerDelegate {
          refreshCGM()
      }
      
@@ -40,7 +40,7 @@ index 09ee0c1..5705403 100644
          guard let cgmManager = cgmManager else {
              completion?()
              return
-@@ -1121,6 +1130,8 @@ extension DeviceDataManager: PumpManagerDelegate {
+@@ -1129,6 +1138,8 @@ extension DeviceDataManager: PumpManagerDelegate {
                      if self.loopManager.lastLoopCompleted == nil || self.loopManager.lastLoopCompleted!.timeIntervalSinceNow < -.minutes(4.2) {
                          self.log.default("Triggering Loop from refreshCGM()")
                          self.checkPumpDataAndLoop()
@@ -50,10 +50,19 @@ index 09ee0c1..5705403 100644
                      completion?()
                  }
 diff --git a/Loop/Managers/LoopAppManager.swift b/Loop/Managers/LoopAppManager.swift
-index 3971e8c..a301a1d 100644
+index efe8d2ad..50cb3157 100644
 --- a/Loop/Managers/LoopAppManager.swift
 +++ b/Loop/Managers/LoopAppManager.swift
-@@ -370,6 +370,51 @@ class LoopAppManager: NSObject {
+@@ -384,9 +384,60 @@ class LoopAppManager: NSObject {
+         guard let notification = notification else {
+             return false
+         }
++        // Heartbeat pushes are not remote commands: never hand them to the services
++        // (Nightscout would log them as "Unhandled Notification"). This also covers
++        // the push that launched Loop; AppDelegate handles the heartbeat itself.
++        if notification[LoopAppManager.heartbeatUserInfoKey] != nil {
++            return true
++        }
          deviceDataManager?.servicesManager.handleRemoteNotification(notification)
          return true
      }
@@ -105,7 +114,7 @@ index 3971e8c..a301a1d 100644
      
      // MARK: - Deeplinking
      
-@@ -539,6 +584,12 @@ extension LoopAppManager: DeviceOrientationController {
+@@ -556,6 +607,12 @@ extension LoopAppManager: DeviceOrientationController {
  
  extension LoopAppManager: UNUserNotificationCenterDelegate {
      func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
