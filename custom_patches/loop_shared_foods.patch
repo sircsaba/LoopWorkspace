@@ -12,7 +12,7 @@ index 20735e7f..9024fa36 100644
                  case .failure(let error):
                      self.log.error("Failed to add carb entry: %{public}@", String(describing: error))
 diff --git a/Loop/View Models/CarbEntryViewModel.swift b/Loop/View Models/CarbEntryViewModel.swift
-index 37dedee3..f00e6e20 100644
+index 37dedee3..0c931d28 100644
 --- a/Loop/View Models/CarbEntryViewModel.swift	
 +++ b/Loop/View Models/CarbEntryViewModel.swift	
 @@ -10,6 +10,7 @@ import SwiftUI
@@ -55,7 +55,7 @@ index 37dedee3..f00e6e20 100644
 +    let fat: Double?
 +    let protein: Double?
 +    let energy: Double?      // kcal in one portion
-+    let gi: Int?             // Nightscout: 1 high (fast), 2 medium, 3 low (slow)
++    let gi: Int?             // Nightscout: 1 low GI (slow), 2 medium, 3 high GI (fast)
 +    let gluten: String       // free, contains, unsure, unknown
 +    let favorite: Bool
 +    let meals: [String]      // breakfast, lunch, supper, snack
@@ -358,8 +358,8 @@ index 37dedee3..f00e6e20 100644
 +
 +    // MARK: Absorption time
 +
-+    /// From the foods: fast, medium or slow (Nightscout's GI 1, 2, 3; medium
-+    /// when not given), weighted by carbs, plus time for fat and protein (they
++    /// From the foods: slow, medium or fast (Nightscout's GI 1 low, 2 medium,
++    /// 3 high; medium when not given), weighted by carbs, plus time for fat and protein (they
 +    /// slow the meal down): half an hour per 20 g above 15 g, at most 2 hours.
 +    static func absorptionTime(for picks: [SharedFoodPick], defaults: CarbStore.DefaultAbsorptionTimes) -> (TimeInterval, String) {
 +        let carbs = picks.reduce(0) { $0 + $1.carbs }
@@ -368,8 +368,8 @@ index 37dedee3..f00e6e20 100644
 +            base = picks.reduce(0) { sum, k in
 +                let t: TimeInterval
 +                switch k.food.gi {
-+                case 1: t = defaults.fast
-+                case 3: t = defaults.slow
++                case 1: t = defaults.slow
++                case 3: t = defaults.fast
 +                default: t = defaults.medium
 +                }
 +                return sum + t * k.carbs / carbs
