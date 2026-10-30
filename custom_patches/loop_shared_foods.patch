@@ -1,0 +1,676 @@
+diff --git a/Loop/View Models/BolusEntryViewModel.swift b/Loop/View Models/BolusEntryViewModel.swift
+index 20735e7f..9024fa36 100644
+--- a/Loop/View Models/BolusEntryViewModel.swift	
++++ b/Loop/View Models/BolusEntryViewModel.swift	
+@@ -309,6 +309,8 @@ final class BolusEntryViewModel: ObservableObject {
+             delegate.addCarbEntry(entry, replacing: replacingEntry) { result in
+                 switch result {
+                 case .success(let storedCarbEntry):
++                    // Shared food list: what was eaten goes to Nightscout once the entry is saved.
++                    NotificationCenter.default.post(name: .sharedFoodCarbEntrySaved, object: nil, userInfo: ["date": storedCarbEntry.startDate])
+                     continuation.resume(returning: storedCarbEntry)
+                 case .failure(let error):
+                     self.log.error("Failed to add carb entry: %{public}@", String(describing: error))
+diff --git a/Loop/View Models/CarbEntryViewModel.swift b/Loop/View Models/CarbEntryViewModel.swift
+index 37dedee3..f00e6e20 100644
+--- a/Loop/View Models/CarbEntryViewModel.swift	
++++ b/Loop/View Models/CarbEntryViewModel.swift	
+@@ -10,6 +10,7 @@ import SwiftUI
+ import LoopKit
+ import HealthKit
+ import Combine
++import CryptoKit
+ 
+ protocol CarbEntryViewModelDelegate: AnyObject, BolusEntryViewModelDelegate {
+     var analyticsServicesManager: AnalyticsServicesManager { get }
+@@ -316,3 +317,381 @@ final class CarbEntryViewModel: ObservableObject {
+             .store(in: &cancellables)
+     }
+ }
++
++// MARK: - Shared food list (Monitor Glucose)
++//
++// The food list kept on Nightscout (api/v1/food, the same list as the Monitor
++// Glucose apps): picked foods fill in the carbs, food type and absorption time
++// of this carb entry; Loop then works out the bolus as usual. The list is read
++// with the Nightscout (or Monitor Glucose server) address and API secret already
++// set in Loop's services, and kept on the phone for use without internet. After
++// the carb entry is saved, what was eaten is written to Nightscout as a note
++// (for the nutrition report) and School lunch foods are marked as eaten.
++
++
++extension Notification.Name {
++    static let sharedFoodCarbEntrySaved = Notification.Name("org.loopkit.Loop.sharedFoodCarbEntrySaved")
++}
++
++struct SharedFood: Identifiable, Equatable {
++    let id: String
++    let name: String
++    let brand: String
++    let category: String
++    let portion: Double      // one portion, in `unit`
++    let unit: String         // g, ml, piece, slice, serving...
++    let portionText: String
++    let carbs: Double        // grams in one portion
++    let fat: Double?
++    let protein: Double?
++    let energy: Double?      // kcal in one portion
++    let gi: Int?             // Nightscout: 1 high (fast), 2 medium, 3 low (slow)
++    let gluten: String       // free, contains, unsure, unknown
++    let favorite: Bool
++    let meals: [String]      // breakfast, lunch, supper, snack
++    let raw: [String: Any]
++
++    static func == (a: SharedFood, b: SharedFood) -> Bool { a.id == b.id }
++
++    static func number(_ v: Any?) -> Double? {
++        if let n = v as? NSNumber { return n.doubleValue }
++        if let s = v as? String { return Double(s.replacingOccurrences(of: ",", with: ".")) }
++        return nil
++    }
++
++    init?(_ j: [String: Any]) {
++        let type = j["type"] as? String ?? "food"
++        guard type == "food", let name = j["name"] as? String, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
++        self.id = (j["_id"] as? String) ?? UUID().uuidString
++        self.name = name.trimmingCharacters(in: .whitespaces)
++        self.brand = j["brand"] as? String ?? ""
++        self.category = j["category"] as? String ?? ""
++        let p = SharedFood.number(j["portion"]) ?? 1
++        self.portion = p > 0 ? p : 1
++        self.unit = (j["unit"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "serving"
++        self.portionText = j["portionText"] as? String ?? ""
++        self.carbs = SharedFood.number(j["carbs"]) ?? 0
++        self.fat = SharedFood.number(j["fat"])
++        self.protein = SharedFood.number(j["protein"])
++        self.energy = SharedFood.number(j["energy"])
++        self.gi = SharedFood.number(j["gi"]).map { Int($0) }
++        self.gluten = j["gluten"] as? String ?? "unknown"
++        self.favorite = (j["favorite"] as? Bool) ?? ((j["favorite"] as? String) == "true")
++        self.meals = (j["meals"] as? [String]) ?? []
++        self.raw = j
++    }
++
++    /// "2 pieces", "150 g"
++    func amountText(_ amount: Double) -> String {
++        let n = amount == amount.rounded() ? String(Int(amount)) : String(format: "%.1f", amount)
++        let plural = ["piece", "slice", "cup", "serving"].contains(unit) && amount != 1 ? unit + "s" : unit
++        return "\(n) \(plural)"
++    }
++
++    func carbs(for amount: Double) -> Double { carbs * amount / portion }
++}
++
++/// A food picked for this meal: how much (in the food's unit), and the school
++/// lunch line it comes from, if any.
++struct SharedFoodPick: Identifiable, Equatable {
++    let id = UUID()
++    let food: SharedFood
++    var amount: Double
++    var lunchKey: String? = nil
++    var lunchLeft: Double? = nil
++
++    var carbs: Double { food.carbs(for: amount) }
++    private func part(_ v: Double?) -> Double { (v ?? 0) * amount / food.portion }
++    var fat: Double { part(food.fat) }
++    var protein: Double { part(food.protein) }
++    var energy: Double { part(food.energy) }
++}
++
++/// One line of today's school lunch (prepared in the Monitor Glucose app).
++struct SharedLunchItem: Identifiable {
++    var id: String { key }
++    let key: String
++    let food: SharedFood
++    let amount: Double
++    let eaten: Double
++    var left: Double { max(0, amount - eaten) }
++}
++
++@MainActor
++final class SharedFoodStore: ObservableObject {
++    static let shared = SharedFoodStore()
++
++    @Published private(set) var foods: [SharedFood] = []
++    @Published private(set) var lunch: [SharedLunchItem] = []
++    @Published private(set) var loading = false
++    @Published private(set) var message: String? = nil
++    @Published private(set) var siteName: String? = nil
++
++    /// The foods used for the carb entry being made (sent once it is saved).
++    var pending: (picks: [SharedFoodPick], at: Date)? = nil
++
++    private var observer: NSObjectProtocol?
++    private let cacheKey = "com.monitorglucose.sharedFoods.cache"
++    private let cacheDateKey = "com.monitorglucose.sharedFoods.cacheDate"
++    private let queueKey = "com.monitorglucose.sharedFoods.queue"
++
++    private init() {
++        if let data = UserDefaults.standard.data(forKey: cacheKey) {
++            apply(data)
++        }
++        observer = NotificationCenter.default.addObserver(forName: .sharedFoodCarbEntrySaved, object: nil, queue: .main) { [weak self] note in
++            let date = note.userInfo?["date"] as? Date ?? Date()
++            Task { @MainActor in self?.carbEntrySaved(at: date) }
++        }
++    }
++
++    // MARK: Sites
++
++    /// Nightscout first, then the Monitor Glucose server (also set up in Loop's services).
++    private func sites() -> [(url: URL, secret: String)] {
++        var out: [(URL, String)] = []
++        for account in ["NightscoutAPI", "MonitorGlucoseAPI"] {
++            if let c = try? KeychainManager().getInternetCredentials(account: account), !c.password.isEmpty {
++                out.append((c.url, c.password))
++            }
++        }
++        return out
++    }
++
++    private static func sha1(_ s: String) -> String {
++        Insecure.SHA1.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
++    }
++
++    private func request(_ site: (url: URL, secret: String), _ path: String, method: String = "GET", body: Any? = nil) async throws -> Any? {
++        guard let url = URL(string: site.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else { throw URLError(.badURL) }
++        var r = URLRequest(url: url, timeoutInterval: 15)
++        r.httpMethod = method
++        r.setValue("application/json", forHTTPHeaderField: "Accept")
++        r.setValue(SharedFoodStore.sha1(site.secret), forHTTPHeaderField: "api-secret")
++        if let body {
++            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
++            r.httpBody = try JSONSerialization.data(withJSONObject: body)
++        }
++        let (data, resp) = try await URLSession.shared.data(for: r)
++        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
++        guard (200..<300).contains(code) else { throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code)"]) }
++        return data.isEmpty ? nil : try? JSONSerialization.jsonObject(with: data)
++    }
++
++    // MARK: Loading
++
++    func load() async {
++        guard !loading else { return }
++        loading = true
++        defer { loading = false }
++        let all = sites()
++        if all.isEmpty {
++            message = NSLocalizedString("Set up Nightscout in Loop (Settings › Services) to see the food list.", comment: "Shared food list: no site")
++            return
++        }
++        for site in all {
++            do {
++                guard let list = try await request(site, "/api/v1/food.json?count=5000") as? [Any] else { continue }
++                let data = try JSONSerialization.data(withJSONObject: list)
++                UserDefaults.standard.set(data, forKey: cacheKey)
++                UserDefaults.standard.set(Date(), forKey: cacheDateKey)
++                apply(data)
++                siteName = site.url.host
++                message = nil
++                await flushQueue()
++                return
++            } catch {
++                continue
++            }
++        }
++        if let d = UserDefaults.standard.object(forKey: cacheDateKey) as? Date {
++            let f = DateFormatter()
++            f.dateStyle = .short
++            f.timeStyle = .short
++            message = String(format: NSLocalizedString("No internet: the list kept on this phone (%@).", comment: "Shared food list: offline"), f.string(from: d))
++        } else {
++            message = NSLocalizedString("Cannot reach Nightscout. Try again with internet.", comment: "Shared food list: offline, nothing kept")
++        }
++    }
++
++    private static func dayKey(_ d: Date = Date()) -> String {
++        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
++        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
++    }
++
++    private func apply(_ data: Data) {
++        guard let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return }
++        foods = list.compactMap { SharedFood($0) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
++        let today = SharedFoodStore.dayKey()
++        let lunchDoc = list.filter { ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == today }
++            .max { (($0["items"] as? [Any])?.count ?? 0) < (($1["items"] as? [Any])?.count ?? 0) }
++        lunch = ((lunchDoc?["items"] as? [[String: Any]]) ?? []).compactMap { j in
++            guard let key = j["key"] as? String, let f = j["food"] as? [String: Any], let food = SharedFood(f) else { return nil }
++            return SharedLunchItem(key: key, food: food, amount: SharedFood.number(j["amount"]) ?? 1, eaten: SharedFood.number(j["eaten"]) ?? 0)
++        }.filter { $0.left > 0.0001 }
++    }
++
++    // MARK: After the carb entry is saved
++
++    private func carbEntrySaved(at date: Date) {
++        guard let p = pending, Date().timeIntervalSince(p.at) < 3600, !p.picks.isEmpty else { return }
++        pending = nil
++        let iso = ISO8601DateFormatter()
++        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
++        func r(_ v: Double) -> Double { (v * 10).rounded() / 10 }
++        let describe = p.picks.map { "\($0.food.name) \($0.food.amountText($0.amount))" }.joined(separator: ", ")
++        let foods: [[String: Any]] = p.picks.map { k in
++            var m: [String: Any] = ["name": k.food.name, "amount": k.amount, "unit": k.food.unit, "carbs": r(k.carbs)]
++            if !k.food.id.isEmpty { m["foodId"] = k.food.id }
++            if k.food.fat != nil { m["fat"] = r(k.fat) }
++            if k.food.protein != nil { m["protein"] = r(k.protein) }
++            if k.food.energy != nil { m["energy"] = r(k.energy) }
++            return m
++        }
++        var nutrition: [String: Any] = ["carbs": r(p.picks.reduce(0) { $0 + $1.carbs })]
++        if p.picks.contains(where: { $0.food.energy != nil }) { nutrition["energy"] = r(p.picks.reduce(0) { $0 + $1.energy }) }
++        if p.picks.contains(where: { $0.food.protein != nil }) { nutrition["protein"] = r(p.picks.reduce(0) { $0 + $1.protein }) }
++        if p.picks.contains(where: { $0.food.fat != nil }) { nutrition["fat"] = r(p.picks.reduce(0) { $0 + $1.fat }) }
++        let lunchPicks = p.picks.filter { $0.lunchKey != nil }
++        // Not "carbs" on the note: Loop uploads the carb entry itself.
++        var queue = savedQueue()
++        queue.append(["op": "note", "body": [
++            "eventType": "Note",
++            "created_at": iso.string(from: date),
++            "enteredBy": "Loop",
++            "notes": (lunchPicks.isEmpty ? "Meal: " : "School lunch: ") + describe,
++            "foods": foods,
++            "nutrition": nutrition,
++        ] as [String: Any]])
++        if !lunchPicks.isEmpty {
++            var amounts: [String: Double] = [:]
++            for k in lunchPicks { amounts[k.lunchKey!, default: 0] += k.amount }
++            queue.append(["op": "lunch", "date": SharedFoodStore.dayKey(date), "at": iso.string(from: Date()), "amounts": amounts])
++            // Gone from the list on this phone right away.
++            lunch = lunch.compactMap { item in
++                guard let a = amounts[item.key] else { return item }
++                let rest = SharedLunchItem(key: item.key, food: item.food, amount: item.amount, eaten: item.eaten + a)
++                return rest.left > 0.0001 ? rest : nil
++            }
++        }
++        saveQueue(queue)
++        Task { await flushQueue() }
++    }
++
++    private func savedQueue() -> [[String: Any]] {
++        guard let d = UserDefaults.standard.data(forKey: queueKey),
++              let q = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] else { return [] }
++        return q
++    }
++
++    private func saveQueue(_ q: [[String: Any]]) {
++        if let d = try? JSONSerialization.data(withJSONObject: q) {
++            UserDefaults.standard.set(d, forKey: queueKey)
++        }
++    }
++
++    /// Sends what is waiting (notes, school lunch changes); kept for later without internet.
++    func flushQueue() async {
++        var queue = savedQueue()
++        guard !queue.isEmpty else { return }
++        let all = sites()
++        while let item = queue.first {
++            var done = false
++            for site in all {
++                do {
++                    if item["op"] as? String == "note", let body = item["body"] {
++                        _ = try await request(site, "/api/v1/treatments", method: "POST", body: [body])
++                        done = true
++                    } else if item["op"] as? String == "lunch" {
++                        try await markLunch(site, item)
++                        done = true
++                    } else {
++                        done = true // unknown: drop it
++                    }
++                    break
++                } catch {
++                    continue
++                }
++            }
++            if !done { break }
++            queue.removeFirst()
++            saveQueue(queue)
++        }
++    }
++
++    /// Reads the latest school lunch from the site, adds what was eaten, saves it.
++    private func markLunch(_ site: (url: URL, secret: String), _ item: [String: Any]) async throws {
++        guard let date = item["date"] as? String, let amounts = item["amounts"] as? [String: Any] else { return }
++        guard let list = try await request(site, "/api/v1/food.json?count=5000") as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
++        guard var doc = list.filter({ ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == date })
++            .max(by: { (($0["items"] as? [Any])?.count ?? 0) < (($1["items"] as? [Any])?.count ?? 0) }) else { return }
++        var items = doc["items"] as? [[String: Any]] ?? []
++        var eaten = doc["eaten"] as? [[String: Any]] ?? []
++        for k in 0..<items.count {
++            guard let key = items[k]["key"] as? String, let a = SharedFood.number(amounts[key]), a > 0 else { continue }
++            let amount = SharedFood.number(items[k]["amount"]) ?? 0
++            let already = SharedFood.number(items[k]["eaten"]) ?? 0
++            let take = min(a, max(0, amount - already))
++            guard take > 0 else { continue }
++            items[k]["eaten"] = already + take
++            let f = items[k]["food"] as? [String: Any] ?? [:]
++            let food = SharedFood(f)
++            eaten.append([
++                "key": key, "name": food?.name ?? (f["name"] as? String ?? ""), "amount": take, "unit": food?.unit ?? "",
++                "carbs": ((food?.carbs(for: take) ?? 0) * 10).rounded() / 10, "at": item["at"] as? String ?? "", "how": "loop",
++            ])
++        }
++        doc["items"] = items
++        doc["eaten"] = eaten
++        _ = try await request(site, "/api/v1/food", method: "PUT", body: doc)
++    }
++
++    // MARK: Absorption time
++
++    /// From the foods: fast, medium or slow (Nightscout's GI 1, 2, 3; medium
++    /// when not given), weighted by carbs, plus time for fat and protein (they
++    /// slow the meal down): half an hour per 20 g above 15 g, at most 2 hours.
++    static func absorptionTime(for picks: [SharedFoodPick], defaults: CarbStore.DefaultAbsorptionTimes) -> (TimeInterval, String) {
++        let carbs = picks.reduce(0) { $0 + $1.carbs }
++        var base = defaults.medium
++        if carbs > 0 {
++            base = picks.reduce(0) { sum, k in
++                let t: TimeInterval
++                switch k.food.gi {
++                case 1: t = defaults.fast
++                case 3: t = defaults.slow
++                default: t = defaults.medium
++                }
++                return sum + t * k.carbs / carbs
++            }
++        }
++        let fp = picks.reduce(0) { $0 + $1.fat + $1.protein }
++        let extra = min(2 * 3600, max(0, ((fp - 15) / 20).rounded(.up)) * 1800)
++        let total = ((base + extra) / 900).rounded() * 900 // quarter hours
++        var why = String(format: NSLocalizedString("%.1f h from the foods", comment: "Shared food list: absorption reason"), base / 3600)
++        if extra > 0 {
++            why += String(format: NSLocalizedString(", + %.1f h for %d g of fat and protein", comment: "Shared food list: absorption reason, fat and protein"), extra / 3600, Int(fp.rounded()))
++        }
++        return (total, why)
++    }
++}
++
++extension CarbEntryViewModel {
++    /// Fills in this carb entry from foods of the shared food list.
++    @MainActor func useSharedFoods(_ picks: [SharedFoodPick]) {
++        guard !picks.isEmpty else { return }
++        let carbs = picks.reduce(0) { $0 + $1.carbs }
++        carbsQuantity = (carbs * 10).rounded() / 10
++        let names = picks.map { $0.food.name }.joined(separator: ", ")
++        foodType = names.count > 40 ? String(names.prefix(39)) + "…" : names
++        usesCustomFoodType = true
++        let (t, _) = SharedFoodStore.absorptionTime(for: picks, defaults: defaultAbsorptionTimes)
++        let clamped = min(max(t, minAbsorptionTime), maxAbsorptionTime)
++        if clamped != absorptionTime {
++            absorptionEditIsProgrammatic = true
++            absorptionTime = clamped
++        }
++        absorptionTimeWasEdited = true
++        SharedFoodStore.shared.pending = (picks, Date())
++    }
++}
+diff --git a/Loop/Views/CarbEntryView.swift b/Loop/Views/CarbEntryView.swift
+index 5831836f..5a21847b 100644
+--- a/Loop/Views/CarbEntryView.swift
++++ b/Loop/Views/CarbEntryView.swift
+@@ -21,6 +21,8 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+     
+     @State private var showHowAbsorptionTimeWorks = false
+     @State private var showAddFavoriteFood = false
++    @State private var showSharedFoods = false
++    @State private var sharedPicks: [SharedFoodPick] = []
+     
+     private let isNewEntry: Bool
+ 
+@@ -68,6 +70,11 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+             ScrollView {
+                 warningsCard
+ 
++                if isNewEntry {
++                    sharedFoodsCard
++                        .padding(.top, 8)
++                }
++
+                 mainCard
+                     .padding(.top, 8)
+                 
+@@ -93,6 +100,12 @@ struct CarbEntryView: View, HorizontalSizeClassOverride {
+         .sheet(isPresented: $showHowAbsorptionTimeWorks) {
+             HowAbsorptionTimeWorksView()
+         }
++        .sheet(isPresented: $showSharedFoods) {
++            SharedFoodPickerView(initial: sharedPicks, defaults: viewModel.defaultAbsorptionTimes) { picks in
++                sharedPicks = picks
++                viewModel.useSharedFoods(picks)
++            }
++        }
+     }
+     
+     private var mainCard: some View {
+@@ -286,6 +299,230 @@ extension CarbEntryView {
+     }
+ }
+ 
++// MARK: - Shared food list (Monitor Glucose)
++extension CarbEntryView {
++    private var sharedFoodsCard: some View {
++        VStack(alignment: .leading, spacing: 8) {
++            Button(action: { showSharedFoods = true }) {
++                HStack {
++                    Image(systemName: "fork.knife")
++                    Text(sharedPicks.isEmpty
++                         ? NSLocalizedString("Choose foods", comment: "Button to pick foods from the shared food list")
++                         : NSLocalizedString("Change the foods", comment: "Button to change the foods picked from the shared food list"))
++                        .fontWeight(.semibold)
++                    Spacer()
++                    Image(systemName: "chevron.right").foregroundColor(.secondary)
++                }
++            }
++            if !sharedPicks.isEmpty {
++                ForEach(sharedPicks) { k in
++                    HStack {
++                        Text("\(k.food.name)  \(k.food.amountText(k.amount))").font(.footnote).lineLimit(1)
++                        Spacer()
++                        Text(String(format: "%.0f g", k.carbs)).font(.footnote).foregroundColor(.secondary)
++                    }
++                }
++            }
++        }
++        .padding(.vertical, 12)
++        .padding(.horizontal)
++        .background(CardBackground())
++        .padding(.horizontal)
++    }
++}
++
++/// The shared food list (Nightscout): pick foods and how much; carbs, food
++/// type and absorption time of the carb entry are filled in from them.
++struct SharedFoodPickerView: View {
++    @Environment(\.dismiss) private var dismiss
++    @ObservedObject private var store = SharedFoodStore.shared
++    let defaults: CarbStore.DefaultAbsorptionTimes
++    let onUse: @MainActor ([SharedFoodPick]) -> Void
++
++    @State private var picks: [SharedFoodPick]
++    @State private var search = ""
++    @State private var filter = "favorites"
++    @State private var glutenFreeOnly = false
++
++    init(initial: [SharedFoodPick], defaults: CarbStore.DefaultAbsorptionTimes, onUse: @escaping @MainActor ([SharedFoodPick]) -> Void) {
++        _picks = State(initialValue: initial)
++        self.defaults = defaults
++        self.onUse = onUse
++    }
++
++    private static let filters: [(String, String)] = [
++        ("favorites", NSLocalizedString("Favorites", comment: "Food filter")),
++        ("all", NSLocalizedString("All", comment: "Food filter")),
++        ("breakfast", NSLocalizedString("Breakfast", comment: "Food filter")),
++        ("lunch", NSLocalizedString("Lunch", comment: "Food filter")),
++        ("supper", NSLocalizedString("Supper", comment: "Food filter")),
++        ("snack", NSLocalizedString("Snack", comment: "Food filter")),
++        ("school", NSLocalizedString("School lunch", comment: "Food filter")),
++    ]
++
++    private var shown: [SharedFood] {
++        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
++        return store.foods.filter { f in
++            if glutenFreeOnly && f.gluten != "free" { return false }
++            if !q.isEmpty { return "\(f.name) \(f.brand) \(f.category)".lowercased().contains(q) }
++            switch filter {
++            case "favorites": return f.favorite
++            case "all": return true
++            default: return f.meals.contains(filter)
++            }
++        }
++    }
++
++    private var totalCarbs: Double { picks.reduce(0) { $0 + $1.carbs } }
++
++    var body: some View {
++        NavigationView {
++            List {
++                if let m = store.message {
++                    Text(m).font(.footnote).foregroundColor(.orange)
++                }
++                if !picks.isEmpty {
++                    Section(header: Text("This meal", comment: "Section of the picked foods")) {
++                        ForEach($picks) { $k in
++                            pickRow($k)
++                        }
++                        .onDelete { picks.remove(atOffsets: $0) }
++                        let absorption = SharedFoodStore.absorptionTime(for: picks, defaults: defaults)
++                        Text(String(format: NSLocalizedString("Absorption time %.1f h (%@)", comment: "Shared food list: absorption time shown"), absorption.0 / 3600, absorption.1))
++                            .font(.caption).foregroundColor(.secondary)
++                    }
++                }
++                Section(header: filterBar) {
++                    if filter == "school" && search.isEmpty {
++                        if store.lunch.isEmpty {
++                            Text("Nothing left in today's school lunch.", comment: "Shared food list: no school lunch").foregroundColor(.secondary)
++                        }
++                        ForEach(store.lunch) { item in
++                            let picked = picks.contains { $0.lunchKey == item.key }
++                            Button(action: { toggleLunch(item) }) {
++                                foodRow(item.food, detail: "\(item.food.amountText(item.left)) · \(String(format: "%.0f", item.food.carbs(for: item.left))) g", picked: picked)
++                            }
++                        }
++                    } else {
++                        if shown.isEmpty {
++                            Text(store.foods.isEmpty && store.loading ? NSLocalizedString("Loading…", comment: "Shared food list: loading") : NSLocalizedString("No food here. Try All, or search.", comment: "Shared food list: empty"))
++                                .foregroundColor(.secondary)
++                        }
++                        ForEach(shown) { f in
++                            Button(action: { add(f) }) {
++                                foodRow(f, detail: "\(String(format: "%.0f", f.carbs)) g carbs / \(f.amountText(f.portion))", picked: picks.contains { $0.food.id == f.id && $0.lunchKey == nil })
++                            }
++                        }
++                    }
++                }
++            }
++            .listStyle(.insetGrouped)
++            .searchable(text: $search, prompt: Text("Search the foods", comment: "Shared food list: search"))
++            .refreshable { await store.load() }
++            .navigationBarTitle(Text("Foods", comment: "Shared food list title"), displayMode: .inline)
++            .toolbar {
++                ToolbarItem(placement: .navigationBarLeading) {
++                    Button(action: { dismiss() }) { Text("Cancel", comment: "Button label for cancel") }
++                }
++                ToolbarItem(placement: .navigationBarTrailing) {
++                    Button(action: {
++                        onUse(picks)
++                        dismiss()
++                    }) {
++                        Text(String(format: NSLocalizedString("Use %.0f g", comment: "Shared food list: use the picked foods"), totalCarbs)).fontWeight(.semibold)
++                    }
++                    .disabled(picks.isEmpty)
++                }
++            }
++            .task {
++                if store.foods.isEmpty || !store.loading { await store.load() }
++                if store.foods.allSatisfy({ !$0.favorite }) && filter == "favorites" { filter = store.lunch.isEmpty ? "all" : "school" }
++            }
++        }
++    }
++
++    private var filterBar: some View {
++        ScrollView(.horizontal, showsIndicators: false) {
++            HStack(spacing: 6) {
++                ForEach(0..<SharedFoodPickerView.filters.count, id: \.self) { i in
++                    let f = SharedFoodPickerView.filters[i]
++                    chip(f.1, on: filter == f.0, icon: f.0 == "favorites" ? "star.fill" : (f.0 == "school" ? "takeoutbag.and.cup.and.straw" : nil)) { filter = f.0 }
++                }
++                chip(NSLocalizedString("Gluten-free only", comment: "Food filter"), on: glutenFreeOnly, icon: nil) { glutenFreeOnly.toggle() }
++            }
++            .padding(.vertical, 4)
++        }
++        .textCase(nil)
++    }
++
++    private func chip(_ title: String, on: Bool, icon: String?, action: @escaping () -> Void) -> some View {
++        Button(action: action) {
++            HStack(spacing: 4) {
++                if let icon { Image(systemName: icon).font(.caption) }
++                Text(title).font(.subheadline)
++            }
++            .padding(.horizontal, 12)
++            .padding(.vertical, 6)
++            .foregroundColor(on ? .white : .primary)
++            .background(Capsule().fill(on ? Color.accentColor : Color(.secondarySystemFill)))
++        }
++        .buttonStyle(.plain)
++    }
++
++    private func foodRow(_ f: SharedFood, detail: String, picked: Bool) -> some View {
++        HStack(spacing: 10) {
++            Image(systemName: picked ? "checkmark.circle.fill" : (f.favorite ? "star.fill" : "circle"))
++                .foregroundColor(picked ? .accentColor : (f.favorite ? .orange : .secondary))
++            VStack(alignment: .leading, spacing: 2) {
++                Text(f.name).foregroundColor(.primary).lineLimit(2)
++                Text([f.brand, detail].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundColor(.secondary)
++            }
++            Spacer()
++            if f.gluten == "free" {
++                Text("GF").font(.caption2.bold()).foregroundColor(.green)
++                    .padding(.horizontal, 5).padding(.vertical, 2)
++                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.green))
++            } else if f.gluten == "contains" {
++                Text("Gluten").font(.caption2.bold()).foregroundColor(.red)
++                    .padding(.horizontal, 5).padding(.vertical, 2)
++                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.red))
++            }
++        }
++    }
++
++    private func pickRow(_ k: Binding<SharedFoodPick>) -> some View {
++        let p = k.wrappedValue
++        let step = p.lunchLeft.map { $0 / 4 } ?? p.food.portion / 2
++        let maximum = p.lunchLeft ?? p.food.portion * 20
++        return VStack(alignment: .leading, spacing: 4) {
++            HStack {
++                Text(p.food.name).lineLimit(1)
++                Spacer()
++                Text(String(format: "%.0f g", p.carbs)).foregroundColor(.secondary)
++            }
++            Stepper(value: k.amount, in: step...maximum, step: step) {
++                Text(p.food.amountText((p.amount * 100).rounded() / 100)).font(.caption)
++            }
++        }
++    }
++
++    private func add(_ f: SharedFood) {
++        if let i = picks.firstIndex(where: { $0.food.id == f.id && $0.lunchKey == nil }) {
++            picks[i].amount += f.portion
++        } else {
++            picks.append(SharedFoodPick(food: f, amount: f.portion))
++        }
++    }
++
++    private func toggleLunch(_ item: SharedLunchItem) {
++        if let i = picks.firstIndex(where: { $0.lunchKey == item.key }) {
++            picks.remove(at: i)
++        } else {
++            picks.append(SharedFoodPick(food: item.food, amount: item.left, lunchKey: item.key, lunchLeft: item.left))
++        }
++    }
++}
++
+ // MARK: - Other UI Elements
+ extension CarbEntryView {
+     private var dismissButton: some View {

@@ -203,6 +203,8 @@ jobs:
           # Submodule xxxxx patches:
           # Loop heartbeat push (wakes Loop on each new Nightscout reading, see custom_patches/INSTALL.md)
           git apply --directory=Loop -v --whitespace=fix ./custom_patches/loop_heartbeat.patch
+          # Shared food list (Monitor Glucose): pick foods from Nightscout's food list on Loop's carb entry screen
+          git apply --directory=Loop -v --whitespace=fix ./custom_patches/loop_shared_foods.patch
           # Nightscout CGM: second "backup server" source with a Nightscout / Backup selector in its settings
           git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./custom_patches/nightscout_cgm_backup_source.patch
 
