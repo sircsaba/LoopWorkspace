@@ -12,7 +12,7 @@ makes exactly the same Loop, with the same changes, until you decide to update.
   Learn's repository on 2026-10-25), not downloaded at each build.
 - Your own changes are here too: heartbeat, shared food list, Nightscout CGM
   backup source (with the phone name), Nightscout service phone name / backup phone,
-  backup source, Basal Lock 125.
+  and Basal Lock 125.
 - The branch `loop-3.14.11-frozen` marks this exact version, to come back to it
   (never build from it or change it: it is only a copy to go back to).
 
