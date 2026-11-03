@@ -103,8 +103,8 @@ jobs:
                 echo "### :white_check_mark: No new Loop from LoopKit (still $before)"
                 echo "Your changes apply cleanly. Nothing to do."
               else
-                echo "### :white_check_mark: New Loop ($before → $after, $new new commits): just build"
-                echo "Everything still applies cleanly: run **Actions › 4. Build Loop** on \`$BRANCH\`."
+                echo "### :white_check_mark: New Loop ($before → $after, $new new commits): it would build"
+                echo "Everything still applies cleanly. Your Loop is frozen: to take this version, set \`LOOP_FROZEN: 'false'\` in build_loop.yml on \`$BRANCH\`, then run **Actions › 4. Build Loop** (see custom_patches/FROZEN.md)."
               fi
               echo ""
               echo "Applied:"
