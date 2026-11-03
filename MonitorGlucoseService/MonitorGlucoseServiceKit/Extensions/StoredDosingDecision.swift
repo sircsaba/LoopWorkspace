@@ -209,10 +209,11 @@ enum MonitorGlucosePhone {
         return m
     }()
 
-    /// "Wi-Fi", "cellular" (mobile data), "offline" or "other".
+    /// "Wi-Fi", "cellular" (mobile data) or "other". Never "offline": Loop
+    /// only uploads when it is online, and right after Loop starts the network
+    /// is not known yet for a moment (then "other", shown as nothing).
     static var network: String {
         let p = monitor.currentPath
-        if p.status != .satisfied { return "offline" }
         if p.usesInterfaceType(.wifi) { return "Wi-Fi" }
         if p.usesInterfaceType(.cellular) { return "cellular" }
         return "other"

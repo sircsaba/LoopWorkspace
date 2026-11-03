@@ -1,5 +1,5 @@
 diff --git a/NightscoutServiceKit/Extensions/StoredDosingDecision.swift b/NightscoutServiceKit/Extensions/StoredDosingDecision.swift
-index 4e1d49e..78eff1d 100644
+index 4e1d49e..24f3625 100644
 --- a/NightscoutServiceKit/Extensions/StoredDosingDecision.swift
 +++ b/NightscoutServiceKit/Extensions/StoredDosingDecision.swift
 @@ -7,6 +7,7 @@
@@ -25,7 +25,7 @@ index 4e1d49e..78eff1d 100644
              timestamp: date,
              pumpStatus: pumpStatus,
              uploaderStatus: uploaderStatus,
-@@ -188,3 +190,31 @@ extension StoredDosingDecision.StoredDeviceHighlight {
+@@ -188,3 +190,32 @@ extension StoredDosingDecision.StoredDeviceHighlight {
      }
  }
  
@@ -48,10 +48,11 @@ index 4e1d49e..78eff1d 100644
 +        return m
 +    }()
 +
-+    /// "Wi-Fi", "cellular" (mobile data), "offline" or "other".
++    /// "Wi-Fi", "cellular" (mobile data) or "other". Never "offline": Loop
++    /// only uploads when it is online, and right after Loop starts the network
++    /// is not known yet for a moment (then "other", shown as nothing).
 +    static var network: String {
 +        let p = monitor.currentPath
-+        if p.status != .satisfied { return "offline" }
 +        if p.usesInterfaceType(.wifi) { return "Wi-Fi" }
 +        if p.usesInterfaceType(.cellular) { return "cellular" }
 +        return "other"
