@@ -12,7 +12,7 @@ index 20735e7f..9024fa36 100644
                  case .failure(let error):
                      self.log.error("Failed to add carb entry: %{public}@", String(describing: error))
 diff --git a/Loop/View Models/CarbEntryViewModel.swift b/Loop/View Models/CarbEntryViewModel.swift
-index 37dedee3..0c931d28 100644
+index 37dedee3..f73bfcc4 100644
 --- a/Loop/View Models/CarbEntryViewModel.swift	
 +++ b/Loop/View Models/CarbEntryViewModel.swift	
 @@ -10,6 +10,7 @@ import SwiftUI
@@ -23,7 +23,7 @@ index 37dedee3..0c931d28 100644
  
  protocol CarbEntryViewModelDelegate: AnyObject, BolusEntryViewModelDelegate {
      var analyticsServicesManager: AnalyticsServicesManager { get }
-@@ -316,3 +317,381 @@ final class CarbEntryViewModel: ObservableObject {
+@@ -316,3 +317,416 @@ final class CarbEntryViewModel: ObservableObject {
              .store(in: &cancellables)
      }
  }
@@ -56,6 +56,7 @@ index 37dedee3..0c931d28 100644
 +    let protein: Double?
 +    let energy: Double?      // kcal in one portion
 +    let gi: Int?             // Nightscout: 1 low GI (slow), 2 medium, 3 high GI (fast)
++    let absorption: Double?  // hours, set for this food in the Monitor Glucose apps
 +    let gluten: String       // free, contains, unsure, unknown
 +    let favorite: Bool
 +    let meals: [String]      // breakfast, lunch, supper, snack
@@ -85,6 +86,7 @@ index 37dedee3..0c931d28 100644
 +        self.protein = SharedFood.number(j["protein"])
 +        self.energy = SharedFood.number(j["energy"])
 +        self.gi = SharedFood.number(j["gi"]).map { Int($0) }
++        self.absorption = SharedFood.number(j["absorption"])
 +        self.gluten = j["gluten"] as? String ?? "unknown"
 +        self.favorite = (j["favorite"] as? Bool) ?? ((j["favorite"] as? String) == "true")
 +        self.meals = (j["meals"] as? [String]) ?? []
@@ -231,10 +233,27 @@ index 37dedee3..0c931d28 100644
 +
 +    private func apply(_ data: Data) {
 +        guard let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return }
-+        foods = list.compactMap { SharedFood($0) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
++        // Older Nightscout versions can keep two copies of a changed food (same _id): the newest is used.
++        var newest: [String: [String: Any]] = [:]
++        var order: [String] = []
++        for d in list {
++            guard let id = d["_id"] as? String else { continue }
++            if let had = newest[id] {
++                if (d["created_at"] as? String ?? "") > (had["created_at"] as? String ?? "") { newest[id] = d }
++            } else {
++                newest[id] = d
++                order.append(id)
++            }
++        }
++        foods = order.compactMap { newest[$0].flatMap { SharedFood($0) } }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 +        let today = SharedFoodStore.dayKey()
-+        let lunchDoc = list.filter { ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == today }
++        var lunchDoc = list.filter { ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == today }
 +            .max { (($0["items"] as? [Any])?.count ?? 0) < (($1["items"] as? [Any])?.count ?? 0) }
++        // A school day without its own lunch: the default lunch box.
++        let weekday = Calendar.current.component(.weekday, from: Date()) // 1 Sunday ... 7 Saturday
++        if lunchDoc == nil, (2...6).contains(weekday) {
++            lunchDoc = list.first { ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == "default" }
++        }
 +        lunch = ((lunchDoc?["items"] as? [[String: Any]]) ?? []).compactMap { j in
 +            guard let key = j["key"] as? String, let f = j["food"] as? [String: Any], let food = SharedFood(f) else { return nil }
 +            return SharedLunchItem(key: key, food: food, amount: SharedFood.number(j["amount"]) ?? 1, eaten: SharedFood.number(j["eaten"]) ?? 0)
@@ -333,8 +352,20 @@ index 37dedee3..0c931d28 100644
 +    private func markLunch(_ site: (url: URL, secret: String), _ item: [String: Any]) async throws {
 +        guard let date = item["date"] as? String, let amounts = item["amounts"] as? [String: Any] else { return }
 +        guard let list = try await request(site, "/api/v1/food.json?count=5000") as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
-+        guard var doc = list.filter({ ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == date })
-+            .max(by: { (($0["items"] as? [Any])?.count ?? 0) < (($1["items"] as? [Any])?.count ?? 0) }) else { return }
++        var found = list.filter({ ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == date })
++            .max(by: { (($0["items"] as? [Any])?.count ?? 0) < (($1["items"] as? [Any])?.count ?? 0) })
++        var isNew = false
++        if found == nil, var def = list.first(where: { ($0["type"] as? String) == "schoollunch" && ($0["date"] as? String) == "default" }) {
++            // This day used the default lunch box: it gets its own copy now.
++            def.removeValue(forKey: "_id")
++            def["date"] = date
++            def["name"] = "School lunch \(date)"
++            def["eaten"] = [[String: Any]]()
++            def["items"] = (def["items"] as? [[String: Any]] ?? []).map { var i = $0; i["eaten"] = 0; return i }
++            found = def
++            isNew = true
++        }
++        guard var doc = found else { return }
 +        var items = doc["items"] as? [[String: Any]] ?? []
 +        var eaten = doc["eaten"] as? [[String: Any]] ?? []
 +        for k in 0..<items.count {
@@ -353,7 +384,7 @@ index 37dedee3..0c931d28 100644
 +        }
 +        doc["items"] = items
 +        doc["eaten"] = eaten
-+        _ = try await request(site, "/api/v1/food", method: "PUT", body: doc)
++        _ = try await request(site, "/api/v1/food", method: isNew ? "POST" : "PUT", body: doc)
 +    }
 +
 +    // MARK: Absorption time
@@ -367,10 +398,14 @@ index 37dedee3..0c931d28 100644
 +        if carbs > 0 {
 +            base = picks.reduce(0) { sum, k in
 +                let t: TimeInterval
-+                switch k.food.gi {
-+                case 1: t = defaults.slow
-+                case 3: t = defaults.fast
-+                default: t = defaults.medium
++                if let h = k.food.absorption, h > 0 {
++                    t = h * 3600 // set for this food
++                } else {
++                    switch k.food.gi {
++                    case 1: t = defaults.slow
++                    case 3: t = defaults.fast
++                    default: t = defaults.medium
++                    }
 +                }
 +                return sum + t * k.carbs / carbs
 +            }

@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Network
 import HealthKit
 import LoopKit
 import NightscoutKit
@@ -142,11 +143,12 @@ extension StoredDosingDecision {
         let isCharging: Bool? = uploaderDevice.isBatteryMonitoringEnabled
             ? (uploaderDevice.batteryState == .charging || uploaderDevice.batteryState == .full)
             : nil
-        return UploaderStatus(name: uploaderDevice.name, timestamp: date, battery: battery, isCharging: isCharging)
+        // "Valérie (Wi-Fi)": the phone name set in Loop › Services › Monitor Glucose, and its network.
+        return UploaderStatus(name: "\(MonitorGlucosePhone.name) (\(MonitorGlucosePhone.network))", timestamp: date, battery: battery, isCharging: isCharging)
     }
     
     func deviceStatus(automaticDoseDecision: StoredDosingDecision?) -> DeviceStatus {
-        return DeviceStatus(device: "loop://\(UIDevice.current.name)",
+        return DeviceStatus(device: "loop://\(MonitorGlucosePhone.name)",
             timestamp: date,
             pumpStatus: pumpStatus,
             uploaderStatus: uploaderStatus,
@@ -188,3 +190,31 @@ extension StoredDosingDecision.StoredDeviceHighlight {
     }
 }
 
+
+
+/// The phone name (Loop › Services › Monitor Glucose: tells two phones apart
+/// on the sites), "backup phone" (uploads nothing, so it never takes the
+/// remote commands meant for the Looper's phone) and the network in use.
+enum MonitorGlucosePhone {
+    static var name: String {
+        let n = (UserDefaults.standard.string(forKey: "MonitorGlucose.phoneName") ?? "").trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? UIDevice.current.name : n
+    }
+
+    static var isBackupPhone: Bool { UserDefaults.standard.bool(forKey: "MonitorGlucose.backupPhone") }
+
+    private static let monitor: NWPathMonitor = {
+        let m = NWPathMonitor()
+        m.start(queue: DispatchQueue(label: "MonitorGlucosePhone.network"))
+        return m
+    }()
+
+    /// "Wi-Fi", "cellular" (mobile data), "offline" or "other".
+    static var network: String {
+        let p = monitor.currentPath
+        if p.status != .satisfied { return "offline" }
+        if p.usesInterfaceType(.wifi) { return "Wi-Fi" }
+        if p.usesInterfaceType(.cellular) { return "cellular" }
+        return "other"
+    }
+}

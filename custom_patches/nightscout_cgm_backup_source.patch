@@ -1,5 +1,5 @@
 diff --git a/NightscoutRemoteCGM/NightscoutAPIService.swift b/NightscoutRemoteCGM/NightscoutAPIService.swift
-index e9385a6..576adbe 100644
+index e9385a6..696da07 100644
 --- a/NightscoutRemoteCGM/NightscoutAPIService.swift
 +++ b/NightscoutRemoteCGM/NightscoutAPIService.swift
 @@ -146,6 +146,34 @@ extension KeychainManager {
@@ -51,7 +51,7 @@ index 7e94ba1..f9c5308 100644
          super.init(rootView: view)
  
 diff --git a/NightscoutRemoteCGM/NightscoutRemoteCGM.swift b/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
-index 2021658..44a6408 100644
+index 2021658..a148e15 100644
 --- a/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
 +++ b/NightscoutRemoteCGM/NightscoutRemoteCGM.swift
 @@ -37,6 +37,7 @@ public class NightscoutRemoteCGM: CGMManager {
@@ -62,7 +62,7 @@ index 2021658..44a6408 100644
          static let filterNoise = 2.5
      }
  
-@@ -49,14 +50,59 @@ public class NightscoutRemoteCGM: CGMManager {
+@@ -49,14 +50,64 @@ public class NightscoutRemoteCGM: CGMManager {
      public convenience required init?(rawState: CGMManager.RawStateValue) {
          self.init()
          useFilter = rawState[Config.useFilterKey] as? Bool ?? false
@@ -115,7 +115,12 @@ index 2021658..44a6408 100644
 +    private var activeClient: NightscoutFetcher? {
 +        guard useBackup else { return nightscoutService.client }
 +        if backupClient == nil, let url = backupURL, let secret = backupAPISecret {
-+            backupClient = NightscoutFetcher(url: url, apiSecret: secret)
++            // With a phone name (Loop › Services › Monitor Glucose), the address
++            // says which phone reads: https://bg.example.com/p/<name> (a Monitor
++            // Glucose server understands it; it shows which phone is on the backup).
++            let name = (UserDefaults.standard.string(forKey: "MonitorGlucose.phoneName") ?? "").trimmingCharacters(in: .whitespaces)
++            let named = name.isEmpty ? url : url.appendingPathComponent("p").appendingPathComponent(name)
++            backupClient = NightscoutFetcher(url: named, apiSecret: secret)
 +        }
 +        return backupClient
 +    }
@@ -123,7 +128,7 @@ index 2021658..44a6408 100644
      private let keychain = KeychainManager()
  
      public var nightscoutService: NightscoutAPIService {
-@@ -94,7 +140,7 @@ public class NightscoutRemoteCGM: CGMManager {
+@@ -94,7 +145,7 @@ public class NightscoutRemoteCGM: CGMManager {
      private var isFetching = false
  
      public func fetchNewDataIfNeeded(_ completion: @escaping (CGMReadingResult) -> Void) {
@@ -132,7 +137,7 @@ index 2021658..44a6408 100644
              delegateQueue.async {
                  completion(.noData)
              }
-@@ -197,11 +243,11 @@ public class NightscoutRemoteCGM: CGMManager {
+@@ -197,11 +248,11 @@ public class NightscoutRemoteCGM: CGMManager {
      public var device: HKDevice? = nil
  
      public var debugDescription: String {
@@ -147,7 +152,7 @@ index 2021658..44a6408 100644
          case "http://127.0.0.1:1979":
              return URL(string: "spikeapp://")
 diff --git a/NightscoutRemoteCGM/SettingsView.swift b/NightscoutRemoteCGM/SettingsView.swift
-index a3a9c16..035e944 100644
+index a3a9c16..e6ec7b4 100644
 --- a/NightscoutRemoteCGM/SettingsView.swift
 +++ b/NightscoutRemoteCGM/SettingsView.swift
 @@ -13,22 +13,54 @@ private let frameworkBundle = Bundle(for: SettingsViewModel.self)

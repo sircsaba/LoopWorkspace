@@ -211,6 +211,8 @@ jobs:
           git apply --directory=Loop -v --whitespace=fix ./custom_patches/loop_shared_foods.patch
           # Nightscout CGM: second "backup server" source with a Nightscout / Backup selector in its settings
           git apply --directory=NightscoutRemoteCGM -v --whitespace=fix ./custom_patches/nightscout_cgm_backup_source.patch
+          # Nightscout service: phone name and network in Loop's status uploads; a backup phone uploads nothing
+          git apply --directory=NightscoutService -v --whitespace=fix ./custom_patches/nightscout_service_phone.patch
 
           # Add patches for customization of additional submodules by following the templates above, 
           # and make sure to specify the submodule by setting "--directory=(submodule_name)".

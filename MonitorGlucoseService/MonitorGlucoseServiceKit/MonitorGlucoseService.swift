@@ -53,6 +53,9 @@ public final class MonitorGlucoseService: Service {
     private var _uploader: NightscoutClient?
 
     private var uploader: NightscoutClient? {
+        // A backup phone (Loop › Services › Monitor Glucose) uploads nothing:
+        // the sites keep the Looper's phone, and remote commands go only to it.
+        if MonitorGlucosePhone.isBackupPhone { return nil }
         if _uploader == nil {
             guard let siteURL = siteURL, let apiSecret = apiSecret else {
                 return nil
