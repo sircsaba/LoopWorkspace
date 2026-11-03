@@ -8,6 +8,10 @@ env:
   UPSTREAM_REPO: LoopKit/LoopWorkspace
   UPSTREAM_BRANCH: main # Monitor Glucose branch: keep in sync with LoopKit main (this branch does not exist upstream)
   TARGET_BRANCH: ${{ github.ref_name }} # target branch on fork to be kept in sync
+  # Frozen Loop: 'true' builds exactly what is on this branch (no merge of new
+  # LoopKit code). To update Loop one day: run "0. Check Loop update" first, then
+  # set this to 'false' and run this build (see custom_patches/FROZEN.md).
+  LOOP_FROZEN: 'true'
 
 jobs:
   # use a single runner for these sequential steps
@@ -94,7 +98,7 @@ jobs:
       - name: Sync upstream changes
         if: | # do not run the upstream sync action on the upstream repository
           steps.workflow-permission.outputs.has_permission == 'true' &&
-          vars.SCHEDULED_SYNC != 'false' && github.repository_owner != 'LoopKit'
+          vars.SCHEDULED_SYNC != 'false' && env.LOOP_FROZEN != 'true' && github.repository_owner != 'LoopKit'
         id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.2
         with:
@@ -213,20 +217,16 @@ jobs:
           # Several patches may be added per submodule.
           # Adding comments (#) may be useful to easily tell the individual patches apart.
         
-          # The lines below add the customizations listed using the CustomizationSelect script
-          # The "\" is a continuation character 
-          #   the line following a "\" should not be blank
-          # Patches come from Loop and Learn's own customization repository, which is
-          # kept up to date for each new Loop version.
-          export PATCH_REPO=https://github.com/loopandlearn/customization.git PATCH_BRANCH=main
-          /bin/bash -c "$(curl -fsSL \
-          https://raw.githubusercontent.com/sircsaba/lnl-scripts/dev/CustomizationSelect.sh)" \
-          profiles \
-          watch_title \
-          negative_insulin
-          
-          # the final customization listed above CANNOT have a continuation character
-          # more customizations can be pasted after this line
+          # Loop and Learn customizations (Profile Save & Load, watch title, negative
+          # insulin damper): my own copies in custom_patches/lnl, taken from Loop and
+          # Learn's repository (commit aba1371, 2026-10-25) for Loop 3.14.11, so a
+          # frozen Loop always gets the same ones. Same order as their script.
+          for p in custom_patches/lnl/dev_profiles.patch custom_patches/lnl/watch_title.patch custom_patches/lnl/main380_negative_insulin.patch; do
+            if ! git apply --whitespace=nowarn -v "$p"; then
+              echo "::error::Customization $p no longer fits this Loop version: see custom_patches/FROZEN.md"
+              exit 1
+            fi
+          done
 
           # Basal Lock with a 125 mg/dL lower limit: my own copy in custom_patches,
           # so Loop and Learn updates never change the limit (see custom_patches/BASAL_LOCK.md).
